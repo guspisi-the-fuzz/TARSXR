@@ -57,3 +57,13 @@ Restaurar somente alterações do gate a partir do backup registrado; preservar 
 - Primeira tentativa TTS foi cancelada; tentativa posterior completou o callback e a UI mostrou teste concluído após transcrição real. Confirmação audível pelo usuário ainda PENDENTE. Não marcar PASS antes da confirmação audível e dos testes de cancelamento/repetição/interrupção.
 - Permissão negada e reação de amplitude precisam de validação específica; teste físico continua Gate 7. Aviso SDK: installTap legado depreciado em iOS 27 (mantido por compatibilidade; revisar no hardening).
 - Gate 2 permanece BLOQUEADO. Rollback do app: reverter o commit de áudio sobre 2da6b0d, compilar e executar a regressão.
+
+
+## Ajuste após teste do usuário
+
+O usuário ouviu a saída, mas não confirmou inteligibilidade nem correspondência da transcrição com sua voz; não percebeu a reação do átomo. Aceitação permanece PENDENTE. Ajustes: voz a 0,42 e resposta curta; transcrição destacada e rolável; medidor de entrada e nome do microfone; expansão do átomo por RMS de até 42%, núcleo ampliado, com margem para não cortar as órbitas; pausa de 2,4 s e espera inicial de 15 s. A barra mede áudio captado, não identifica quem falou. TTS continua com animação por estado, sem medição de amplitude de saída. Build Simulator PASS; regressão 63 passed in 0.72s. Exige reteste com frase conhecida antes de avançar Gate 2.
+
+
+## Reteste e requisito de interação contínua
+
+Usuário confirmou que a própria fala foi reconhecida e que ouviu a voz, com latência perceptível. Reação do átomo continua não aprovada pelo usuário. Não marcar Gate 1 PASS. Seleção PT/EN de teste adicionada; não representa reconhecimento universal/multilíngue automático. Build bilíngue Simulator PASS. Requisito de produto registrado: escuta contínua em primeiro plano, pausa explícita por voz (“pare”, “vai descansar”), retomada definida, prevenção de autoescuta do TTS e indicador de microfone; ainda NÃO implementado. Botões atuais são controles de validação. Não prometer execução irrestrita em background no iOS. TTS ainda só altera o estado do átomo, não fornece amplitude de saída.

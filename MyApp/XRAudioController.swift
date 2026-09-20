@@ -9,9 +9,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var transcript = ""
     @Published private(set) var message = "Toque em Falar para ativar o microfone."
     @Published private(set) var level: Double = 0
+    @Published private(set) var inputName = ""
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "pt-BR"))
+    @Published var language = "pt-BR"
+    private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognition: SFSpeechRecognitionTask?
     private var timeout: Task<Void, Never>?
@@ -50,6 +52,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             message = "Permita microfone e reconhecimento nos Ajustes para falar."
             return
         }
+        recognizer = SFSpeechRecognizer(locale: Locale(identifier: language))
         guard let recognizer, recognizer.isAvailable else {
             fail("Reconhecimento de voz indisponível. Tente novamente."); return
         }
@@ -57,6 +60,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
+            inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -71,7 +75,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 let amplitude = Self.amplitude(buffer)
                 Task { @MainActor in
                     guard let self, self.generation == id, self.state == "LISTENING" else { return }
-                    self.level = self.level * 0.55 + amplitude * 0.45
+                    self.level = self.level * 0.25 + amplitude * 0.75
                     if amplitude > 0.08 { self.lastVoice = Date() }
                 }
             }
@@ -97,10 +101,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     guard !Task.isCancelled, let self, self.generation == id,
                           self.state == "LISTENING" else { return }
                     let silence = Date().timeIntervalSince(self.lastVoice)
-                    if (!self.transcript.isEmpty && silence > 1.6) || Date().timeIntervalSince(began) > 20 {
+                    if (!self.transcript.isEmpty && silence > 2.4) || Date().timeIntervalSince(began) > 20 {
                         self.finish(); return
                     }
-                    if self.transcript.isEmpty && Date().timeIntervalSince(began) > 8 {
+                    if self.transcript.isEmpty && Date().timeIntervalSince(began) > 15 {
                         self.cancel(message: "Não ouvi uma frase. Toque em Falar para tentar novamente."); return
                     }
                 }
@@ -129,12 +133,15 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         stopCapture()
         guard !text.isEmpty else { cancel(message: "Nenhuma fala reconhecida."); return }
-        speak("Ouvi você dizer: \(text). Este é um teste de áudio. Ainda não estou conectado à inteligência artificial.")
+        let prefix = language == "en-US" ? "You said" : "Você disse"
+        speak("\(prefix): \(String(text.prefix(120))).")
     }
 
     func testVoice() {
         guard state == "IDLE" else { return }
-        speak("Olá! Eu sou o TARS. Minha saída de áudio está pronta para o teste.")
+        speak(language == "en-US"
+              ? "Hello! I am TARS. My voice is ready for testing."
+              : "Olá! Eu sou o TARS. Minha saída de áudio está pronta para o teste.")
     }
 
     private func speak(_ text: String) {
@@ -143,8 +150,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)
             let speech = AVSpeechUtterance(string: text)
-            speech.voice = AVSpeechSynthesisVoice(language: "pt-BR")
-            speech.rate = AVSpeechUtteranceDefaultSpeechRate
+            speech.voice = AVSpeechSynthesisVoice(language: language)
+            speech.rate = 0.42
+            speech.volume = 1.0
+            speech.preUtteranceDelay = 0.25
             utterance = speech
             state = "PREPARING"; status = "PREPARING"
             message = text
@@ -174,7 +183,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let identifier = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard let current = self.utterance, ObjectIdentifier(current) == identifier else { return }
-            self.cancel(message: "Teste concluído. Toque em Falar para conversar novamente.")
+            self.cancel(message: "Confira abaixo o que foi reconhecido. Toque em Falar para repetir.")
         }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {

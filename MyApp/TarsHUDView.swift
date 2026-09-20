@@ -72,9 +72,9 @@ struct CognitiveDisplay: View {
     // Microphone RMS drives expansion; synthesized speech uses its actual lifecycle state.
     private func drawAtom(context: inout GraphicsContext, size: CGSize, time: Double) {
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let radius = max(12, min(size.width * 0.39, (size.height - 105) * 0.5))
+        let radius = max(12, min(size.width * 0.30, (size.height - 105) * 0.38))
         let clock = time.truncatingRemainder(dividingBy: 3600)
-        let breath = 1 + 0.035 * sin(clock * energy * 1.7) + (reduceMotion ? 0 : level * 0.12)
+        let breath = 1 + 0.035 * sin(clock * energy * 1.7) + (reduceMotion ? 0 : level * 0.42)
         let r = radius * breath
         let halo = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
         context.fill(Path(ellipseIn: halo), with: .radialGradient(
@@ -108,7 +108,7 @@ struct CognitiveDisplay: View {
             context.fill(Path(ellipseIn: CGRect(x: electron.x - 2, y: electron.y - 2,
                                                width: 4, height: 4)), with: .color(.white))
         }
-        let core = 17.0 * breath
+        let core = 17.0 * breath * (1 + (reduceMotion ? 0 : level * 0.7))
         context.fill(Path(ellipseIn: CGRect(x: center.x - core * 2, y: center.y - core * 2,
                                            width: core * 4, height: core * 4)),
                      with: .radialGradient(Gradient(colors: [.cyan.opacity(0.7), .pink.opacity(0.3), .clear]),
@@ -153,8 +153,28 @@ private struct AudioControls: View {
     @ObservedObject var audio: XRAudioController
     var body: some View {
         VStack(spacing: 8) {
+            Picker("Idioma da fala", selection: $audio.language) {
+                Text("Português").tag("pt-BR")
+                Text("English").tag("en-US")
+            }.pickerStyle(.segmented).disabled(audio.state != "IDLE")
+            if audio.state == "LISTENING" {
+                HStack(spacing: 4) {
+                    Image(systemName: "mic.fill").foregroundStyle(.cyan)
+                    ForEach(0..<16, id: \.self) { index in
+                        Capsule().fill(Double(index) / 16 < audio.level ? Color.cyan : Color.cyan.opacity(0.12))
+                            .frame(height: 7)
+                    }
+                }.accessibilityLabel("Nível do microfone")
+                Text(audio.inputName).font(.caption2).foregroundStyle(.gray).lineLimit(1)
+            }
             if !audio.transcript.isEmpty {
-                Text(audio.transcript).foregroundStyle(.white).font(.caption).lineLimit(2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("OUVI ISTO:").font(.caption2).foregroundStyle(.cyan)
+                    ScrollView {
+                        Text(audio.transcript).foregroundStyle(.white).font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 65)
+                }
             }
             Text(audio.message).foregroundStyle(.cyan.opacity(0.8))
                 .font(.caption2).lineLimit(3).multilineTextAlignment(.center)
