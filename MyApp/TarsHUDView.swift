@@ -76,10 +76,14 @@ struct CognitiveDisplay: View {
 
     // Microphone RMS drives expansion; synthesized speech uses its actual lifecycle state.
     private func drawAtom(context: inout GraphicsContext, size: CGSize, time: Double) {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let radius = max(12, min(size.width * 0.30, (size.height - 105) * 0.38))
         let clock = time.truncatingRemainder(dividingBy: 3600)
-        let breath = 1 + 0.035 * sin(clock * energy * 1.7)
+        // Smooth deterministic waves avoid random frame-to-frame flicker.
+        // Speaking motion is illustrative; listening motion uses microphone RMS.
+        let activity = reduceMotion ? 0 : (state == "SPEAKING" ? 0.45 : min(1, level * 1.5))
+        let center = CGPoint(x: size.width / 2 + sin(clock * 3.1) * activity * 9,
+                             y: size.height / 2 + cos(clock * 2.7) * activity * 9)
+        let radius = max(12, min(size.width * 0.26, (size.height - 105) * 0.32))
+        let breath = 1 + 0.035 * sin(clock * energy * 1.7) + activity * 0.08 * sin(clock * 7)
         let r = radius * breath
         let halo = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
         context.fill(Path(ellipseIn: halo), with: .radialGradient(
@@ -87,9 +91,14 @@ struct CognitiveDisplay: View {
             center: center, startRadius: 0, endRadius: r))
         for orbit in 0..<3 {
             let rotation = Double(orbit) * .pi / 3 + 0.15 * sin(clock * 0.15)
+                + activity * sin(clock * (1.8 + Double(orbit) * 0.4) + Double(orbit)) * 1.1
             func point(_ angle: Double) -> CGPoint {
-                let x = cos(angle) * r
-                let y = sin(angle) * r * 0.36
+                let wave = sin(angle * 5 + clock * 5 + Double(orbit) * 2)
+                    + 0.45 * sin(angle * 9 - clock * 3)
+                let distortedRadius = r * (1 + activity * 0.20 * wave)
+                let x = cos(angle) * distortedRadius
+                let flattening = 0.36 + activity * 0.22 * sin(clock * 2 + Double(orbit))
+                let y = sin(angle) * distortedRadius * flattening
                 return CGPoint(x: center.x + x * cos(rotation) - y * sin(rotation),
                                y: center.y + x * sin(rotation) + y * cos(rotation))
             }
@@ -113,7 +122,20 @@ struct CognitiveDisplay: View {
             context.fill(Path(ellipseIn: CGRect(x: electron.x - 2, y: electron.y - 2,
                                                width: 4, height: 4)), with: .color(.white))
         }
-        let core = 17.0 * breath
+        // Particle corona swells and flows with the same microphone envelope.
+        for particle in 0..<36 {
+            let phase = Double(particle) * .pi * 2 / 36
+            let theta = phase + clock * 0.35
+            let distance = r * (0.65 + activity * 0.35 * sin(phase * 3 + clock * 2.5))
+            let p = CGPoint(x: center.x + cos(theta) * distance,
+                            y: center.y + sin(theta) * distance)
+            let dot = 1 + activity * 2
+            context.fill(Path(ellipseIn: CGRect(x: p.x - dot, y: p.y - dot,
+                                               width: dot * 2, height: dot * 2)),
+                         with: .color(Color(hue: Double(particle) / 36, saturation: 0.7,
+                                            brightness: 1).opacity(0.15 + activity * 0.65)))
+        }
+        let core = 17.0 * breath * (1 + activity * 0.8)
         context.fill(Path(ellipseIn: CGRect(x: center.x - core * 2, y: center.y - core * 2,
                                            width: core * 4, height: core * 4)),
                      with: .radialGradient(Gradient(colors: [.cyan.opacity(0.7), .pink.opacity(0.3), .clear]),
