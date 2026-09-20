@@ -51,6 +51,11 @@ struct CognitiveDisplay: View {
                         drawAtom(context: &context, size: size, time: t)
                     }
                 }
+                // Keep microphone transforms outside TimelineView/Canvas so level
+                // updates always invalidate the visible transform, not only its drawing closure.
+                .scaleEffect(reduceMotion ? 1 : 1 + level * 0.38)
+                .rotationEffect(.degrees(reduceMotion ? 0 : level * 18))
+                .animation(.easeOut(duration: 0.10), value: level)
                 .accessibilityHidden(true)
                 VStack(spacing: 6) {
                     Text("T A R S").font(.system(size: 19, weight: .medium, design: .monospaced))
@@ -74,7 +79,7 @@ struct CognitiveDisplay: View {
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let radius = max(12, min(size.width * 0.30, (size.height - 105) * 0.38))
         let clock = time.truncatingRemainder(dividingBy: 3600)
-        let breath = 1 + 0.035 * sin(clock * energy * 1.7) + (reduceMotion ? 0 : level * 0.42)
+        let breath = 1 + 0.035 * sin(clock * energy * 1.7)
         let r = radius * breath
         let halo = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
         context.fill(Path(ellipseIn: halo), with: .radialGradient(
@@ -108,7 +113,7 @@ struct CognitiveDisplay: View {
             context.fill(Path(ellipseIn: CGRect(x: electron.x - 2, y: electron.y - 2,
                                                width: 4, height: 4)), with: .color(.white))
         }
-        let core = 17.0 * breath * (1 + (reduceMotion ? 0 : level * 0.7))
+        let core = 17.0 * breath
         context.fill(Path(ellipseIn: CGRect(x: center.x - core * 2, y: center.y - core * 2,
                                            width: core * 4, height: core * 4)),
                      with: .radialGradient(Gradient(colors: [.cyan.opacity(0.7), .pink.opacity(0.3), .clear]),
