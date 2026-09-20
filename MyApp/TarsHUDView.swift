@@ -2,25 +2,33 @@ import SwiftUI
 
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
+    @StateObject private var audio = XRAudioController()
+    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
-                CognitiveDisplay(state: model.voiceState)
+                CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
+                AudioControls(audio: audio)
                 Rectangle().frame(height: 1).foregroundStyle(.green)
-                EngineeringPanel(model: model)
+                EngineeringPanel(model: model, audioStatus: audio.status)
                     .frame(maxHeight: .infinity)
             }
             .foregroundStyle(.green)
             .fontDesign(.monospaced)
         }
         .task { await model.run() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
+        }
+        .onDisappear { audio.cancel() }
     }
 }
 
 struct CognitiveDisplay: View {
     let state: String
+    var level: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     private var energy: Double {
@@ -61,12 +69,12 @@ struct CognitiveDisplay: View {
         }
     }
 
-    // Decorative orbital motion reflects the reported state, not audio amplitude.
+    // Microphone RMS drives expansion; synthesized speech uses its actual lifecycle state.
     private func drawAtom(context: inout GraphicsContext, size: CGSize, time: Double) {
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let radius = max(12, min(size.width * 0.39, (size.height - 105) * 0.5))
         let clock = time.truncatingRemainder(dividingBy: 3600)
-        let breath = 1 + 0.035 * sin(clock * energy * 1.7)
+        let breath = 1 + 0.035 * sin(clock * energy * 1.7) + (reduceMotion ? 0 : level * 0.12)
         let r = radius * breath
         let halo = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
         context.fill(Path(ellipseIn: halo), with: .radialGradient(
@@ -114,13 +122,14 @@ struct CognitiveDisplay: View {
 
 struct EngineeringPanel: View {
     @ObservedObject var model: TarsHUDViewModel
+    var audioStatus: String
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text("SYSTEM STATUS").bold(); Spacer(); Text(model.connected ? "LINK" : "OFFLINE") }
                 Divider().overlay(.green.opacity(0.5))
                 ForEach(model.systemRows, id: \.0) { row in
-                    HStack { Text(row.0); Spacer(); Text(row.1).bold() }
+                    HStack { Text(row.0); Spacer(); Text(row.0 == "AUDIO" ? audioStatus : row.1).bold() }
                 }
                 Divider().overlay(.green.opacity(0.5))
                 HStack(alignment: .top) {
@@ -136,5 +145,32 @@ struct EngineeringPanel: View {
             Text(title).bold()
             ForEach(rows, id: \.0) { r in HStack { Text(r.0); Spacer(); Text(r.1) } }
         }.frame(maxWidth: .infinity)
+    }
+}
+
+
+private struct AudioControls: View {
+    @ObservedObject var audio: XRAudioController
+    var body: some View {
+        VStack(spacing: 8) {
+            if !audio.transcript.isEmpty {
+                Text(audio.transcript).foregroundStyle(.white).font(.caption).lineLimit(2)
+            }
+            Text(audio.message).foregroundStyle(.cyan.opacity(0.8))
+                .font(.caption2).lineLimit(3).multilineTextAlignment(.center)
+            HStack(spacing: 16) {
+                if audio.state == "IDLE" {
+                    Button { Task { await audio.start() } } label: {
+                        Label("Falar", systemImage: "mic.fill")
+                    }
+                    Button("Testar voz") { audio.testVoice() }
+                } else {
+                    if audio.state == "LISTENING" {
+                        Button("Concluir") { audio.finish() }
+                    }
+                    Button("Cancelar") { audio.cancel() }
+                }
+            }.buttonStyle(.bordered).tint(.cyan).font(.caption)
+        }.padding(.horizontal, 16).padding(.vertical, 10)
     }
 }
