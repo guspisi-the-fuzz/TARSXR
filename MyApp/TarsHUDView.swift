@@ -21,21 +21,94 @@ struct TarsHUDView: View {
 
 struct CognitiveDisplay: View {
     let state: String
-    @State private var phase = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    private var energy: Double {
+        switch state.uppercased() {
+        case "LISTENING": return 1.3
+        case "THINKING": return 1.8
+        case "SPEAKING": return 1.5
+        default: return 0.65
+        }
+    }
     var body: some View {
         GeometryReader { g in
             ZStack {
-                ForEach(0..<5, id: \.self) { i in
-                    Circle().stroke(.green.opacity(0.18 + Double(i) * 0.08), lineWidth: 1)
-                        .frame(width: CGFloat(90 + i*34), height: CGFloat(90 + i*34))
-                        .scaleEffect(phase ? 1.05 : 0.94)
+                RadialGradient(colors: [Color.purple.opacity(0.16), .black],
+                               center: .center, startRadius: 0, endRadius: g.size.width * 0.6)
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                        paused: reduceMotion || scenePhase != .active)) { timeline in
+                    let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                    Canvas { context, size in
+                        drawAtom(context: &context, size: size, time: t)
+                    }
                 }
-                Circle().fill(.green.opacity(0.08)).frame(width: 130, height: 130)
-                VStack { Text("T A R S").font(.title2).tracking(8); Text(state).font(.caption) }
+                .accessibilityHidden(true)
+                VStack(spacing: 6) {
+                    Text("T A R S").font(.system(size: 19, weight: .medium, design: .monospaced))
+                        .tracking(9).foregroundStyle(.white.opacity(0.92))
+                    Text("COGNITIVE INTERFACE").font(.system(size: 8, design: .monospaced))
+                        .tracking(3).foregroundStyle(.cyan.opacity(0.65))
+                    Spacer()
+                    HStack(spacing: 7) {
+                        Circle().fill(.cyan).frame(width: 4, height: 4)
+                        Text(state.uppercased()).font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .tracking(3).foregroundStyle(.white.opacity(0.85))
+                    }
+                }.padding(.vertical, 22)
             }.frame(width: g.size.width, height: g.size.height)
+                .clipped()
         }
-        .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: phase)
-        .onAppear { phase = true }
+    }
+
+    // Decorative orbital motion reflects the reported state, not audio amplitude.
+    private func drawAtom(context: inout GraphicsContext, size: CGSize, time: Double) {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let radius = max(12, min(size.width * 0.39, (size.height - 105) * 0.5))
+        let clock = time.truncatingRemainder(dividingBy: 3600)
+        let breath = 1 + 0.035 * sin(clock * energy * 1.7)
+        let r = radius * breath
+        let halo = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
+        context.fill(Path(ellipseIn: halo), with: .radialGradient(
+            Gradient(colors: [.purple.opacity(0.2), .blue.opacity(0.06), .clear]),
+            center: center, startRadius: 0, endRadius: r))
+        for orbit in 0..<3 {
+            let rotation = Double(orbit) * .pi / 3 + 0.15 * sin(clock * 0.15)
+            func point(_ angle: Double) -> CGPoint {
+                let x = cos(angle) * r
+                let y = sin(angle) * r * 0.36
+                return CGPoint(x: center.x + x * cos(rotation) - y * sin(rotation),
+                               y: center.y + x * sin(rotation) + y * cos(rotation))
+            }
+            for segment in 0..<120 {
+                let a = Double(segment) / 120 * .pi * 2
+                let b = Double(segment + 1) / 120 * .pi * 2
+                let hue = (Double(segment) / 240 + Double(orbit) * 0.15 + clock * 0.025)
+                    .truncatingRemainder(dividingBy: 1)
+                let color = Color(hue: hue, saturation: 0.8, brightness: 1)
+                var path = Path(); path.move(to: point(a)); path.addLine(to: point(b))
+                context.stroke(path, with: .color(color.opacity(0.08)), lineWidth: 9)
+                context.stroke(path, with: .color(color.opacity(0.3)), lineWidth: 3)
+                context.stroke(path, with: .color(color.opacity(0.9)), lineWidth: 1)
+            }
+            let angle = clock * energy * 0.8 + Double(orbit) * 2.1
+            let electron = point(angle)
+            let glow = CGRect(x: electron.x - 10, y: electron.y - 10, width: 20, height: 20)
+            context.fill(Path(ellipseIn: glow), with: .radialGradient(
+                Gradient(colors: [.cyan.opacity(0.9), .purple.opacity(0.3), .clear]),
+                center: electron, startRadius: 0, endRadius: 10))
+            context.fill(Path(ellipseIn: CGRect(x: electron.x - 2, y: electron.y - 2,
+                                               width: 4, height: 4)), with: .color(.white))
+        }
+        let core = 17.0 * breath
+        context.fill(Path(ellipseIn: CGRect(x: center.x - core * 2, y: center.y - core * 2,
+                                           width: core * 4, height: core * 4)),
+                     with: .radialGradient(Gradient(colors: [.cyan.opacity(0.7), .pink.opacity(0.3), .clear]),
+                                           center: center, startRadius: 0, endRadius: core * 2))
+        context.fill(Path(ellipseIn: CGRect(x: center.x - core / 2, y: center.y - core / 2,
+                                           width: core, height: core)),
+                     with: .radialGradient(Gradient(colors: [.white, .cyan, .purple]),
+                                           center: center, startRadius: 0, endRadius: core))
     }
 }
 
