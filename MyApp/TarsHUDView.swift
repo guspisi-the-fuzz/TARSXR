@@ -18,7 +18,10 @@ struct TarsHUDView: View {
             .foregroundStyle(.green)
             .fontDesign(.monospaced)
         }
-        .task { await model.run() }
+        .task {
+            audio.respond = { text, language in try await model.converse(text: text, language: language) }
+            await model.run()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
         }
@@ -180,6 +183,8 @@ private struct AudioControls: View {
     @ObservedObject var audio: XRAudioController
     var body: some View {
         VStack(spacing: 8) {
+            Toggle("Conversar com IA", isOn: $audio.useAI)
+                .font(.caption).tint(.cyan).disabled(audio.state != "IDLE")
             Picker("Idioma da fala", selection: $audio.language) {
                 Text("Português").tag("pt-BR")
                 Text("English").tag("en-US")

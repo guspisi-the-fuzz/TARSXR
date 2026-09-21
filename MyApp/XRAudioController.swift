@@ -17,6 +17,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognition: SFSpeechRecognitionTask?
     private var timeout: Task<Void, Never>?
+    private var conversationTask: Task<Void, Never>?
+    var respond: ((String, String) async throws -> String)?
+    @Published var useAI = false
     private var tapInstalled = false
     private var generation = UUID()
     private var lastVoice = Date()
@@ -133,8 +136,27 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         stopCapture()
         guard !text.isEmpty else { cancel(message: "Nenhuma fala reconhecida."); return }
+        if useAI {
+            guard let respond else { fail("A conexão com a IA ainda não está pronta."); return }
+            let id = generation
+            state = "THINKING"; status = "THINKING"
+            message = "TARS está pensando…"
+            conversationTask = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let answer = try await respond(text, self.language)
+                    guard !Task.isCancelled, self.generation == id else { return }
+                    self.speak(answer)
+                } catch {
+                    guard !Task.isCancelled, self.generation == id else { return }
+                    self.fail(error.localizedDescription)
+                }
+            }
+            return
+        }
         let prefix = language == "en-US" ? "You said" : "Você disse"
-        speak("\(prefix): \(String(text.prefix(120))).")
+        let spoken = AudioTestPronunciation.spokenText(text, language: language)
+        speak("\(prefix): \(String(spoken.prefix(120)))")
     }
 
     func testVoice() {
@@ -162,6 +184,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     func cancel(message: String = "Áudio cancelado. Toque em Falar para retomar.") {
+        conversationTask?.cancel(); conversationTask = nil
         stopCapture(); utterance = nil
         speaker.stopSpeaking(at: .immediate)
         state = "IDLE"; status = "IDLE"; self.message = message

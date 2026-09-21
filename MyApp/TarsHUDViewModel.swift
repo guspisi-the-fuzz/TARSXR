@@ -22,6 +22,11 @@ final class TarsHUDViewModel: ObservableObject {
         self.client = TARSClient(baseURL: baseURL)
     }
 
+    func converse(text: String, language: String) async throws -> String {
+        if client.token == nil { try await client.pair(secret: pairingSecret) }
+        return try await client.converse(text: text, language: language)
+    }
+
     func run() async {
         UIDevice.current.isBatteryMonitoringEnabled = true
 
