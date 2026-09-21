@@ -27,6 +27,11 @@ final class TarsHUDViewModel: ObservableObject {
         return try await client.converse(text: text, language: language)
     }
 
+    func transcribe(data: Data) async throws -> String {
+        if client.token == nil { try await client.pair(secret: pairingSecret) }
+        return try await client.transcribe(data: data)
+    }
+
     func run() async {
         UIDevice.current.isBatteryMonitoringEnabled = true
 

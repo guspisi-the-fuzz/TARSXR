@@ -2,6 +2,7 @@ import Foundation
 
 struct TARSCommand: Codable { let intent: String; let action: String; let params: [String: Double] }
 struct TARSAPIResponse<T: Decodable>: Decodable { let ok: Bool; let data: T? }
+struct TranscriptionReply: Decodable { let text: String }
 struct ConversationReply: Decodable { let speech: String }
 
 enum TARSClientError: LocalizedError {
@@ -55,6 +56,13 @@ final class TARSClient {
             throw TARSClientError.ai(obj?["error"] as? String ?? "AI_SERVICE_ERROR")
         }
         return data
+    }
+    func transcribe(data: Data) async throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: ["audio": data.base64EncodedString()])
+        let result = try await request(path: "v1/transcription", method: "POST", body: body)
+        let reply = try JSONDecoder().decode(TARSAPIResponse<TranscriptionReply>.self, from: result)
+        guard reply.ok, let text = reply.data?.text, !text.isEmpty else { throw TARSClientError.unavailable }
+        return text
     }
     func converse(text: String, language: String) async throws -> String {
         let body = try JSONSerialization.data(withJSONObject: ["text": text, "language": language,

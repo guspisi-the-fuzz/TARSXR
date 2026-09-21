@@ -1,6 +1,7 @@
 import AVFoundation
 import Speech
 import Combine
+import NaturalLanguage
 
 @MainActor
 final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
@@ -12,7 +13,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var inputName = ""
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
-    @Published var language = "pt-BR"
+    private let language = "pt-BR"
+    private var recorder: AVAudioRecorder?
+    private var recordingURL: URL?
+    var transcribe: ((Data) async throws -> String)?
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognition: SFSpeechRecognitionTask?
@@ -44,6 +48,13 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let id = generation
         state = "AUTHORIZING"
         message = "Aguardando permissão de microfone e reconhecimento."
+        if useAI {
+            let mic = await AVAudioApplication.requestRecordPermission()
+            guard id == generation else { return }
+            guard mic else { fail("Permita o microfone nos Ajustes."); return }
+            startMultilingualCapture(id: id)
+            return
+        }
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
@@ -95,7 +106,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     if final { self.finish() }
                     else if let failureCode {
                         let selectedLanguage = self.language == "en-US" ? "inglês" : "português"
-                        self.fail("Reconhecimento em \(selectedLanguage) indisponível (\(failureCode)). Selecione outro idioma e toque em Falar.")
+                        self.fail("Reconhecimento em \(selectedLanguage) indisponível (\(failureCode)). O teste local está indisponível. Tente novamente.")
                     }
                 }
             }
@@ -118,6 +129,76 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         } catch { fail("Não foi possível iniciar o áudio: \(error.localizedDescription)") }
     }
 
+    private func startMultilingualCapture(id: UUID) {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try session.setActive(true)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("tars-\(UUID().uuidString).wav")
+            recordingURL = url
+            let recording = try AVAudioRecorder(url: url, settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000,
+                AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
+            ])
+            recorder = recording
+            recording.isMeteringEnabled = true
+            guard recording.record() else { fail("Não foi possível abrir o microfone."); return }
+            inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
+            transcript = ""; level = 0; lastVoice = Date()
+            state = "LISTENING"; status = "LISTENING"
+            message = "Estou ouvindo… fale naturalmente e pause ao terminar."
+            timeout = Task { [weak self] in
+                let began = Date()
+                var heardVoice = false
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    guard !Task.isCancelled, let self, self.generation == id,
+                          self.state == "LISTENING", let recorder = self.recorder else { return }
+                    recorder.updateMeters()
+                    let power = Double(recorder.averagePower(forChannel: 0))
+                    self.level = min(1, max(0, (power + 55) / 45))
+                    if power > -40 { self.lastVoice = Date(); heardVoice = true }
+                    let elapsed = Date().timeIntervalSince(began)
+                    if heardVoice && (Date().timeIntervalSince(self.lastVoice) > 2.4 || elapsed > 20) {
+                        self.finish(); return
+                    }
+                    if !heardVoice && elapsed > 15 {
+                        self.cancel(message: "Não detectei fala. Toque em Falar para tentar novamente."); return
+                    }
+                }
+            }
+        } catch { fail("Não foi possível iniciar o áudio: \(error.localizedDescription)") }
+    }
+
+    private func finishMultilingualCapture() {
+        recorder?.stop()
+        guard let url = recordingURL, let data = try? Data(contentsOf: url),
+              let transcribe, let respond else {
+            fail("A conexão de voz com o Core ainda não está pronta."); return
+        }
+        stopCapture()
+        let id = generation
+        state = "TRANSCRIBING"; status = "TRANSCRIBING"
+        message = "Entendendo sua fala…"
+        conversationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let text = try await transcribe(data)
+                guard !Task.isCancelled, self.generation == id else { return }
+                self.transcript = text
+                self.state = "THINKING"; self.status = "THINKING"
+                self.message = "TARS está pensando…"
+                let answer = try await respond(text, "auto")
+                guard !Task.isCancelled, self.generation == id else { return }
+                self.speak(answer)
+            } catch {
+                guard !Task.isCancelled, self.generation == id else { return }
+                self.fail(error.localizedDescription)
+            }
+        }
+    }
+
     nonisolated private static func amplitude(_ buffer: AVAudioPCMBuffer) -> Double {
         guard let values = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
         var sum: Float = 0
@@ -128,6 +209,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     private func stopCapture() {
         generation = UUID(); timeout?.cancel(); timeout = nil
+        recorder?.stop(); recorder = nil
+        if let recordingURL { try? FileManager.default.removeItem(at: recordingURL) }
+        recordingURL = nil
         engine.stop()
         if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         request?.endAudio(); recognition?.cancel()
@@ -136,6 +220,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     func finish() {
         guard state == "LISTENING" else { return }
+        if recorder != nil { finishMultilingualCapture(); return }
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         stopCapture()
         guard !text.isEmpty else { cancel(message: "Nenhuma fala reconhecida."); return }
@@ -175,7 +260,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)
             let speech = AVSpeechUtterance(string: text)
-            speech.voice = AVSpeechSynthesisVoice(language: language)
+            let detected = NLLanguageRecognizer.dominantLanguage(for: text)?.rawValue ?? language
+            speech.voice = AVSpeechSynthesisVoice(language: detected) ?? AVSpeechSynthesisVoice(language: language)
             speech.rate = 0.42
             speech.volume = 1.0
             speech.preUtteranceDelay = 0.25

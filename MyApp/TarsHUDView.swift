@@ -19,6 +19,7 @@ struct TarsHUDView: View {
             .fontDesign(.monospaced)
         }
         .task {
+            audio.transcribe = { data in try await model.transcribe(data: data) }
             audio.respond = { text, language in try await model.converse(text: text, language: language) }
             await model.run()
         }
@@ -185,10 +186,8 @@ private struct AudioControls: View {
         VStack(spacing: 8) {
             Toggle("Conversar com IA", isOn: $audio.useAI)
                 .font(.caption).tint(.cyan).disabled(audio.state != "IDLE")
-            Picker("Idioma da fala", selection: $audio.language) {
-                Text("Português").tag("pt-BR")
-                Text("English").tag("en-US")
-            }.pickerStyle(.segmented).disabled(audio.state != "IDLE")
+            Text(audio.useAI ? "Idioma automático · voz multilíngue" : "Teste local em português · multilíngue aguarda API")
+                .font(.caption2).foregroundStyle(.gray)
             if audio.state == "LISTENING" {
                 HStack(spacing: 4) {
                     Image(systemName: "mic.fill").foregroundStyle(.cyan)
