@@ -88,12 +88,15 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             recognition = recognizer.recognitionTask(with: req) { [weak self] result, error in
                 let text = result?.bestTranscription.formattedString
                 let final = result?.isFinal ?? false
-                let failed = error != nil
+                let failureCode = (error as NSError?).map { "\($0.domain)/\($0.code)" }
                 Task { @MainActor in
                     guard let self, self.generation == id, self.state == "LISTENING" else { return }
                     if let text { self.transcript = text }
                     if final { self.finish() }
-                    else if failed { self.fail("Não consegui reconhecer a fala. Tente novamente.") }
+                    else if let failureCode {
+                        let selectedLanguage = self.language == "en-US" ? "inglês" : "português"
+                        self.fail("Reconhecimento em \(selectedLanguage) indisponível (\(failureCode)). Selecione outro idioma e toque em Falar.")
+                    }
                 }
             }
             engine.prepare(); try engine.start()
