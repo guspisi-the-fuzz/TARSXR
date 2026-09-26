@@ -1,16 +1,46 @@
 import Foundation
 
-struct TARSCommand: Codable { let intent: String; let action: String; let params: [String: Double] }
+struct TARSCommandParameters: Codable {
+    var direction: String? = nil
+    var speed: Double? = nil
+    var durationMS: Int? = nil
+    var degrees: Double? = nil
+    var estopGeneration: Int? = nil
+    enum CodingKeys: String, CodingKey {
+        case direction, speed, degrees
+        case durationMS = "duration_ms", estopGeneration = "estop_generation"
+    }
+}
+struct TARSCommand: Codable {
+    let intent: String
+    let action: String
+    let params: TARSCommandParameters
+}
+struct TARSCommandReply: Decodable { let status: String; let reason: String; let telemetry: TARSTelemetry? }
+struct TARSRecoveryReply: Decodable { let recovered: Bool; let state: String }
+struct TARSTelemetry: Decodable {
+    let motionActive: Bool
+    let emergencyStop: Bool
+    let estopGeneration: Int
+    let recoveryRequired: Bool
+    let panDeg: Double
+    enum CodingKeys: String, CodingKey {
+        case motionActive = "motion_active", emergencyStop = "emergency_stop"
+        case estopGeneration = "estop_generation", recoveryRequired = "recovery_required"
+        case panDeg = "pan_deg"
+    }
+}
 struct TARSAPIResponse<T: Decodable>: Decodable { let ok: Bool; let data: T? }
 struct TranscriptionReply: Decodable { let text: String }
 struct ConversationReply: Decodable { let speech: String }
 
 enum TARSClientError: LocalizedError {
-    case unavailable, unauthorized, ai(String)
+    case unavailable, unauthorized, ai(String), rejected(String)
     var errorDescription: String? {
         switch self {
         case .unavailable: return "O Core não respondeu. Confira a conexão."
         case .unauthorized: return "Sessão expirada. Reabra o app para refazer a conexão."
+        case .rejected(let reason): return "Comando bloqueado: \(reason)"
         case .ai(let code):
             switch code {
             case "AI_INSUFFICIENT_QUOTA": return "A API precisa de saldo ou liberação de cota."
@@ -45,17 +75,39 @@ final class TARSClient {
     }
     func request(path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         var r = URLRequest(url: baseURL.appendingPathComponent(path))
-        r.httpMethod = method; r.httpBody = body; r.timeoutInterval = 30
+        r.httpMethod = method; r.httpBody = body; r.timeoutInterval = path == "v1/hud" ? 2 : 30
         if let token { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if body != nil { r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await URLSession.shared.data(for: r)
         guard let http = response as? HTTPURLResponse else { throw TARSClientError.unavailable }
-        if http.statusCode == 401 { throw TARSClientError.unauthorized }
+        if http.statusCode == 401 { token = nil; throw TARSClientError.unauthorized }
         guard (200..<300).contains(http.statusCode) else {
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            if let result = obj?["data"] as? [String: Any], let reason = result["reason"] as? String {
+                throw TARSClientError.rejected(reason)
+            }
+            if path == "v1/command" || path == "v1/recover" { throw TARSClientError.unavailable }
             throw TARSClientError.ai(obj?["error"] as? String ?? "AI_SERVICE_ERROR")
         }
         return data
+    }
+    func command(_ action: String, params: TARSCommandParameters? = nil) async throws -> TARSCommandReply {
+        let body = try JSONEncoder().encode(TARSCommand(intent: "operator", action: action, params: params ?? .init()))
+        let data = try await request(path: "v1/command", method: "POST", body: body)
+        let response = try JSONDecoder().decode(TARSAPIResponse<TARSCommandReply>.self, from: data)
+        guard response.ok, let reply = response.data else { throw TARSClientError.unavailable }
+        return reply
+    }
+    func telemetry() async throws -> TARSTelemetry {
+        let data = try await request(path: "v1/telemetry")
+        let reply = try JSONDecoder().decode(TARSAPIResponse<TARSTelemetry>.self, from: data)
+        guard reply.ok, let telemetry = reply.data else { throw TARSClientError.unavailable }
+        return telemetry
+    }
+    func recover() async throws {
+        let data = try await request(path: "v1/recover", method: "POST", body: Data("{\"confirm\":true}".utf8))
+        let reply = try JSONDecoder().decode(TARSAPIResponse<TARSRecoveryReply>.self, from: data)
+        guard reply.ok, reply.data?.recovered == true else { throw TARSClientError.unavailable }
     }
     func transcribe(data: Data) async throws -> String {
         let body = try JSONSerialization.data(withJSONObject: ["audio": data.base64EncodedString()])

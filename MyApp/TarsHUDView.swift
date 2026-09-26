@@ -168,6 +168,17 @@ struct EngineeringPanel: View {
                     metricColumn("COMPUTE", rows: model.computeRows)
                 }
                 Text("> \(model.logLine)").font(.caption).padding(.top, 4)
+                #if DEBUG && targetEnvironment(simulator)
+                Text("TESTE · ESP32 VIRTUAL").font(.caption).foregroundStyle(.cyan)
+                HStack {
+                    Button("Mover 250 ms") { Task { await model.simulatorCommand("MOVE") } }
+                    Button("Parar") { Task { await model.simulatorCommand("STOP") } }
+                    Button("E-STOP") { Task { await model.simulatorCommand("ESTOP") } }.tint(.red)
+                }.buttonStyle(.bordered).font(.caption)
+                Button("Confirmar recuperação") { Task { await model.simulatorCommand("RECOVER") } }
+                    .buttonStyle(.bordered).font(.caption)
+                Text(model.commandStatus).font(.caption2).foregroundStyle(.cyan)
+                #endif
             }.padding(14)
         }
     }
