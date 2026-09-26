@@ -35,11 +35,12 @@ struct TranscriptionReply: Decodable { let text: String }
 struct ConversationReply: Decodable { let speech: String }
 
 enum TARSClientError: LocalizedError {
-    case unavailable, unauthorized, ai(String), rejected(String)
+    case unavailable, unauthorized, pairingRejected, ai(String), rejected(String)
     var errorDescription: String? {
         switch self {
         case .unavailable: return "O Core não respondeu. Confira a conexão."
-        case .unauthorized: return "Sessão expirada. Reabra o app para refazer a conexão."
+        case .unauthorized: return "Sessão expirada. A conexão será refeita automaticamente."
+        case .pairingRejected: return "Autorização recusada. Confira o pareamento com o Core."
         case .rejected(let reason): return "Comando bloqueado: \(reason)"
         case .ai(let code):
             switch code {
@@ -59,17 +60,26 @@ enum TARSClientError: LocalizedError {
 final class TARSClient {
     let baseURL: URL
     private(set) var token: String?
-    init(baseURL: URL) { self.baseURL = baseURL }
+    private let session: URLSession
+    init(baseURL: URL, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.session = session
+    }
     func pair(secret: String) async throws {
         var r = URLRequest(url: baseURL.appendingPathComponent("v1/session"))
         r.httpMethod = "POST"; r.timeoutInterval = 10
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: ["pairing_secret": secret])
-        let (data, response) = try await URLSession.shared.data(for: r)
-        guard (response as? HTTPURLResponse)?.statusCode == 201,
+        let (data, response) = try await session.data(for: r)
+        let status = (response as? HTTPURLResponse)?.statusCode
+        if status == 401 || status == 403 {
+            token = nil
+            throw TARSClientError.pairingRejected
+        }
+        guard status == 201,
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let d = obj["data"] as? [String: Any], let value = d["token"] as? String, !value.isEmpty else {
-            token = nil; throw TARSClientError.unauthorized
+            token = nil; throw TARSClientError.unavailable
         }
         token = value
     }
@@ -78,7 +88,7 @@ final class TARSClient {
         r.httpMethod = method; r.httpBody = body; r.timeoutInterval = path == "v1/hud" ? 2 : 30
         if let token { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if body != nil { r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        let (data, response) = try await URLSession.shared.data(for: r)
+        let (data, response) = try await session.data(for: r)
         guard let http = response as? HTTPURLResponse else { throw TARSClientError.unavailable }
         if http.statusCode == 401 { token = nil; throw TARSClientError.unauthorized }
         guard (200..<300).contains(http.statusCode) else {

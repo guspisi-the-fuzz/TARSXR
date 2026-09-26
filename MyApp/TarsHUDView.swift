@@ -181,6 +181,10 @@ struct EngineeringPanel: View {
                     metricColumn("COMPUTE", rows: model.computeRows)
                 }
                 Text("> \(model.logLine)").font(.caption).padding(.top, 4)
+                if model.needsConnectionHelp {
+                    Button("Tentar conexão novamente") { Task { await model.retryConnection() } }
+                        .buttonStyle(.bordered)
+                }
 
             }.padding(14)
         }
@@ -257,6 +261,11 @@ private struct SimulatorTestPanel: View {
                         status("Conexão", model.connected ? "Core conectado" : "Sem conexão")
                         status("Movimento", model.motionStatus)
                         status("Segurança", model.safetyStatus)
+                    }
+                    Text(model.connectionMessage).font(.callout).foregroundStyle(.cyan)
+                    if model.needsConnectionHelp {
+                        Button("Tentar conexão novamente") { Task { await model.retryConnection() } }
+                            .buttonStyle(.bordered)
                     }
                     Text(model.safetyGuidance).font(.callout).foregroundStyle(.secondary)
                     Button { Task { await model.simulatorCommand("ESTOP") } } label: {

@@ -64,3 +64,30 @@ Swift e instruções também estão guardados no workspace TARS HW&SW em
 software/rollback/. A verificação inversa do patch passou sem desfazer alterações.
 Manter este padrão nos próximos incrementos: preservar funcionalidades validadas,
 isolar alterações, validar e registrar um mecanismo de rollback antes da entrega.
+
+## RECOVERY-2 — conexão e diagnóstico
+
+Core correspondente: c0069f9. Reconexão automática com intervalos progressivos
+1/2/4/8/15/30 s, teto de 30 s e reset após sucesso. 401 de sessão permite novo
+pairing; rejeição de pairing 401/403 pausa tentativas e mostra botão de nova
+conexão. Nenhum comando de movimento é repetido automaticamente.
+HUD/painel distinguem falha transitória do supervisor, falha persistente e falta
+de atualização. Conectar não equivale a liberar bloqueio de segurança.
+
+Validação: ReconnectionPolicyChecks e ClientReconnectionChecks aprovados; Debug
+mais Release Simulator aprovados. O Core passou 371 testes, incluindo HTTP local.
+Ainda não feita aceitação visual deste incremento nem teste em XR físico.
+
+Para repetir os checks Swift na raiz do app:
+```
+xcrun swiftc MyApp/ReconnectionPolicy.swift Tests/ReconnectionPolicyChecks.swift -o /tmp/tars-reconnection-checks
+/tmp/tars-reconnection-checks
+xcrun swiftc MyApp/TARSClient.swift Tests/ClientReconnectionChecks.swift -o /tmp/tars-client-checks
+/tmp/tars-client-checks
+```
+O cliente de teste usa URLProtocol simulado, sem enviar credenciais à rede.
+
+Alterações de áudio e project.pbxproj presentes na árvore foram preservadas e
+excluídas deste commit. Rollback: reverter somente o commit RECOVERY-2 do app;
+patch reversível verificado no workspace. Não usar reset --hard ou descartar as
+alterações locais. Para rollback do Core, consultar RECOVERY-2.md naquele repo.

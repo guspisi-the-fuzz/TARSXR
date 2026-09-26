@@ -17,10 +17,14 @@ final class TarsHUDViewModel: ObservableObject {
     @Published var safetyStatus = "Desconhecida"
     @Published var virtualSimulator = false
     @Published var commandPending = false
+    @Published var connectionMessage = "Conectando ao Core…"
+    @Published private(set) var needsConnectionHelp = false
+    private var reconnection = ReconnectionPolicy()
+    private var refreshInProgress = false
 
     var canMove: Bool { connected && virtualSimulator && safetyStatus == "Liberado" }
     var safetyGuidance: String {
-        if !connected { return "Sem confirmação do Core. O estado do movimento é desconhecido; aguarde a reconexão." }
+        if !connected { return connectionMessage + " Movimento desconhecido; nenhum comando será repetido." }
         if !virtualSimulator { return "Os testes só ficam disponíveis quando o Core confirma um ESP32 virtual." }
         if safetyStatus == "Bloqueado" { return "O Core mantém o movimento bloqueado. A recuperação verificará as condições de segurança antes de liberar novos comandos." }
         return "Mover envia um pulso de 250 ms ao simulador. E-STOP bloqueia novos movimentos até a recuperação."
@@ -52,28 +56,33 @@ final class TarsHUDViewModel: ObservableObject {
     func run() async {
         UIDevice.current.isBatteryMonitoringEnabled = true
 
-        logLine = "PAIRING..."
-
-        do {
-            try await client.pair(secret: pairingSecret)
-            logLine = "AUTHENTICATED"
-        } catch {
-            connected = false
-            logLine = "PAIRING FAILED"
-        }
+        await refresh()
 
         #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["TARS_SIMULATOR_CHECKS"] == "1" {
+        if connected && ProcessInfo.processInfo.environment["TARS_SIMULATOR_CHECKS"] == "1" {
             commandStatus = await SimulatorSafetyChecks.run(client: client)
         }
         #endif
         while !Task.isCancelled {
-            await refresh()
-            try? await Task.sleep(for: .milliseconds(500))
+            let delay = connected ? 0.5 : Double(reconnection.delaySeconds)
+            do { try await Task.sleep(for: .seconds(delay)) }
+            catch { return }
+            if !reconnection.needsIntervention { await refresh() }
         }
     }
 
+    func retryConnection() async {
+        guard !refreshInProgress else { return }
+        reconnection.reset()
+        needsConnectionHelp = false
+        connectionMessage = "Tentando conectar…"
+        await refresh()
+    }
+
     private func refresh() async {
+        guard !refreshInProgress, !Task.isCancelled else { return }
+        refreshInProgress = true
+        defer { refreshInProgress = false }
         let start = ContinuousClock.now
 
         do {
@@ -95,14 +104,42 @@ final class TarsHUDViewModel: ObservableObject {
             apply(envelope.data, latencyMS: ms)
 
             connected = true
-            logLine = envelope.data.system["safety"] == "CLEAR" ? "CORE CONNECTED" : "CHECK SAFETY STATUS"
+            reconnection.reset()
+            needsConnectionHelp = false
+            let supervisor = envelope.data.system["supervisor"] ?? "UNMONITORED"
+            if supervisor != "READY" && supervisor != "UNMONITORED" {
+                switch supervisor {
+                case "SUPERVISOR_RETRYING":
+                    connectionMessage = "Core conectado; supervisor tentando se recuperar."
+                case "SUPERVISOR_ATTENTION":
+                    connectionMessage = "Falha persistente do supervisor. Verifique o Core; tentativas continuam."
+                case "SUPERVISOR_STALE":
+                    connectionMessage = "Supervisor sem atualização. Verifique o serviço do Core."
+                default:
+                    connectionMessage = "Core conectado; aguardando início do supervisor."
+                }
+            } else if safetyStatus == "Bloqueado" {
+                connectionMessage = "Conexão restabelecida; bloqueio de segurança exige verificação."
+            } else {
+                connectionMessage = "Core conectado."
+            }
+            logLine = connectionMessage
 
         } catch {
+            if Task.isCancelled { return }
+            let rejected: Bool
+            if case TARSClientError.pairingRejected = error { rejected = true }
+            else { rejected = false }
+            reconnection.failed(authorizationRejected: rejected)
+            needsConnectionHelp = rejected
+            connectionMessage = rejected
+                ? "Autorização recusada. Confira o pareamento e tente novamente."
+                : "Reconectando automaticamente. Próxima tentativa em \(reconnection.delaySeconds) s."
             connected = false
             motionStatus = "Desconhecido"
             safetyStatus = "Desconhecida"
             virtualSimulator = false
-            logLine = "CORE LINK UNAVAILABLE"
+            logLine = connectionMessage
             systemRows = [("CORE", "OFFLINE"), ("ESP32", "UNAVAILABLE"), ("SAFETY", "UNKNOWN")]
             sensorRows = ["FRONT", "LEFT", "RIGHT", "REAR", "HEADING"].map { ($0, "N/A") }
             computeRows = [("NET", "N/A")]
