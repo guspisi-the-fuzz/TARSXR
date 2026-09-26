@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
+    @State private var showsTests = false
     @StateObject private var audio = XRAudioController()
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
@@ -10,6 +11,13 @@ struct TarsHUDView: View {
             VStack(spacing: 0) {
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
+                #if DEBUG && targetEnvironment(simulator)
+                Button { showsTests = true } label: {
+                    Label("Painel de Testes", systemImage: "slider.horizontal.3")
+                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered).tint(.cyan).padding(.horizontal, 16)
+                #endif
                 AudioControls(audio: audio)
                 Rectangle().frame(height: 1).foregroundStyle(.green)
                 EngineeringPanel(model: model, audioStatus: audio.status)
@@ -18,6 +26,11 @@ struct TarsHUDView: View {
             .foregroundStyle(.green)
             .fontDesign(.monospaced)
         }
+        #if DEBUG && targetEnvironment(simulator)
+        .sheet(isPresented: $showsTests) {
+            SimulatorTestPanel(model: model)
+        }
+        #endif
         .task {
             audio.transcribe = { data in try await model.transcribe(data: data) }
             audio.respond = { text, language in try await model.converse(text: text, language: language) }
@@ -168,17 +181,7 @@ struct EngineeringPanel: View {
                     metricColumn("COMPUTE", rows: model.computeRows)
                 }
                 Text("> \(model.logLine)").font(.caption).padding(.top, 4)
-                #if DEBUG && targetEnvironment(simulator)
-                Text("TESTE · ESP32 VIRTUAL").font(.caption).foregroundStyle(.cyan)
-                HStack {
-                    Button("Mover 250 ms") { Task { await model.simulatorCommand("MOVE") } }
-                    Button("Parar") { Task { await model.simulatorCommand("STOP") } }
-                    Button("E-STOP") { Task { await model.simulatorCommand("ESTOP") } }.tint(.red)
-                }.buttonStyle(.bordered).font(.caption)
-                Button("Confirmar recuperação") { Task { await model.simulatorCommand("RECOVER") } }
-                    .buttonStyle(.bordered).font(.caption)
-                Text(model.commandStatus).font(.caption2).foregroundStyle(.cyan)
-                #endif
+
             }.padding(14)
         }
     }
@@ -236,3 +239,65 @@ private struct AudioControls: View {
         }.padding(.horizontal, 16).padding(.vertical, 10)
     }
 }
+
+#if DEBUG && targetEnvironment(simulator)
+private struct SimulatorTestPanel: View {
+    @ObservedObject var model: TarsHUDViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmsRecovery = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Label(model.virtualSimulator ? "MODO SIMULADO · ESP32 VIRTUAL" : "SIMULADOR NÃO CONFIRMADO",
+                          systemImage: "desktopcomputer")
+                        .font(.caption.bold()).foregroundStyle(.cyan)
+                    VStack(spacing: 12) {
+                        status("Conexão", model.connected ? "Core conectado" : "Sem conexão")
+                        status("Movimento", model.motionStatus)
+                        status("Segurança", model.safetyStatus)
+                    }
+                    Text(model.safetyGuidance).font(.callout).foregroundStyle(.secondary)
+                    Button { Task { await model.simulatorCommand("ESTOP") } } label: {
+                        Label("E-STOP · Parada de emergência", systemImage: "stop.circle.fill")
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent).tint(.red)
+                    .disabled(!model.connected || !model.virtualSimulator)
+                    HStack {
+                        Button("Mover 250 ms") { Task { await model.simulatorCommand("MOVE") } }
+                            .disabled(!model.canMove || model.commandPending)
+                        Button("Parar") { Task { await model.simulatorCommand("STOP") } }
+                            .disabled(!model.connected || !model.virtualSimulator)
+                    }.buttonStyle(.bordered).controlSize(.large)
+                    Button("Confirmar recuperação") { confirmsRecovery = true }
+                        .buttonStyle(.bordered)
+                        .disabled(!model.connected || !model.virtualSimulator || model.safetyStatus != "Bloqueado" || model.commandPending)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("ÚLTIMO RESULTADO").font(.caption.bold()).foregroundStyle(.cyan)
+                        Text(model.commandStatus.isEmpty ? "Nenhum comando enviado nesta sessão." : model.commandStatus)
+                            .textSelection(.enabled)
+                    }
+                    Text("Estado atualizado a cada consulta ao Core (cerca de 0,5 s). Um movimento de 250 ms pode terminar entre consultas. A aceitação do comando não confirma deslocamento físico.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }.padding(20)
+            }
+            .background(Color.black).foregroundStyle(.white)
+            .navigationTitle("Painel de Testes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fechar") { dismiss() } } }
+            .confirmationDialog("Liberar o bloqueio de segurança?", isPresented: $confirmsRecovery, titleVisibility: .visible) {
+                Button("Confirmar recuperação") { Task { await model.simulatorCommand("RECOVER") } }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("O Core verificará as condições de segurança. Recuperar não inicia movimento; será necessário um novo comando.")
+            }
+        }.preferredColorScheme(.dark)
+    }
+
+    private func status(_ title: String, _ value: String) -> some View {
+        HStack { Text(title).foregroundStyle(.secondary); Spacer(); Text(value).bold() }
+    }
+}
+#endif
