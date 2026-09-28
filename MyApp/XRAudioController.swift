@@ -408,7 +408,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let id = generation
         state = "PREPARING"; status = "PREPARING"
         message = text
-        voiceSource = "Voz gerada por IA · Cedar"
+        voiceSource = "Voz gerada por IA"
         voiceProgress = "Preparando voz natural…"
         speechTask = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == id else { return }
