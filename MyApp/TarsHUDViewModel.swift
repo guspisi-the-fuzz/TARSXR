@@ -200,7 +200,9 @@ final class TarsHUDViewModel: ObservableObject {
             "VISION",
             "AUDIO",
             "ESP32",
-            "SAFETY"
+            "SAFETY",
+            "FORWARD",
+            "REVERSE"
         ].map {
             (
                 $0,

@@ -175,3 +175,11 @@ não concluído: validade por sensor, supervisão externa e aceitação integrad
 prolongada continuam pendentes. XR e firmware permanecem etapas posteriores.
 Rollback: reverter apenas REGRESSION-1; patch regression-1.patch no workspace.
 Alterações locais de pronúncia/project.pbxproj preservadas e não incluídas.
+
+## SENSORS-1 — diagnóstico de direção
+
+HUD agora apresenta FORWARD/REVERSE com motivo atual fornecido pelo Core,
+separado de último resultado de comando. Distâncias vencidas ficam N/A.
+Core com validade individual: 404 testes PASS; app Debug BUILD SUCCEEDED.
+Sem reinstalar/ativar áudio neste incremento. Rollback: reverter apenas este
+commit e o correspondente Core; patch sensors-1-app.patch no workspace.
