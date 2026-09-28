@@ -758,6 +758,14 @@ extension XRAudioController {
             cancelled.stop()
             try await Task.sleep(for: .milliseconds(100))
             try require(!cancelled.hasStarted && completions == 1, "Cancelled stream completed or played")
+            var cameraGate = ReferenceCaptureGate()
+            let oldCapture = cameraGate.begin()
+            cameraGate.cancel()
+            try require(!cameraGate.consume(oldCapture), "Cancelled camera callback accepted")
+            let replacedCapture = cameraGate.begin()
+            let currentCapture = cameraGate.begin()
+            try require(!cameraGate.consume(replacedCapture), "Old camera callback replaced current image")
+            try require(cameraGate.consume(currentCapture) && !cameraGate.consume(currentCapture), "Camera callback not single-use")
             var visualHistories: [[[String: String]]] = []
             let context = VisualConversation { question, history in
                 visualHistories.append(history)
@@ -961,7 +969,7 @@ extension XRAudioController {
             natural.cancel()
             natural.speak("Sem repetir chamada paga")
             try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
-            return "PASS: image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

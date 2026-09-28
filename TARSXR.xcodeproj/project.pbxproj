@@ -256,6 +256,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "O TARS captura uma foto quando você solicita. A imagem só é enviada à IA após sua ação de análise.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O TARS usa o microfone quando você toca em Falar.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O TARS transcreve sua fala para o teste de áudio. O reconhecimento pode usar o serviço da Apple.";
 				INFOPLIST_KEY_CFBundleDisplayName = TARS;
@@ -297,6 +298,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "O TARS captura uma foto quando você solicita. A imagem só é enviada à IA após sua ação de análise.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O TARS usa o microfone quando você toca em Falar.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O TARS transcreve sua fala para o teste de áudio. O reconhecimento pode usar o serviço da Apple.";
 				INFOPLIST_KEY_CFBundleDisplayName = TARS;

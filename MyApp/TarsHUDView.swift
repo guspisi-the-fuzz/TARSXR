@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import ImageIO
+import AVFoundation
 
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
@@ -30,11 +31,13 @@ struct TarsHUDView: View {
             VStack(spacing: 0) {
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 if ProcessInfo.processInfo.environment["TARS_VISION_TEST"] == "1" {
                     Button("Teste de visão") { showsVision = true }
                         .buttonStyle(.bordered).tint(.cyan)
                 }
+                #endif
+                #if DEBUG && targetEnvironment(simulator)
                 if manualDiagnostics {
                 Button { showsTests = true } label: {
                     Label("Painel de Testes", systemImage: "slider.horizontal.3")
@@ -65,8 +68,10 @@ struct TarsHUDView: View {
             .foregroundStyle(.green)
             .fontDesign(.monospaced)
         }
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         .sheet(isPresented: $showsVision) { VisionTestPanel(model: model, audio: audio) }
+        #endif
+        #if DEBUG && targetEnvironment(simulator)
         .sheet(isPresented: $showsTests) {
             SimulatorTestPanel(model: model)
         }
@@ -380,7 +385,7 @@ private struct SimulatorTestPanel: View {
 #endif
 
 
-#if DEBUG && targetEnvironment(simulator)
+#if DEBUG
 /// Explicit, one-image reference test. No camera or background upload.
 private struct VisionTestPanel: View {
     @ObservedObject var model: TarsHUDViewModel
@@ -397,16 +402,23 @@ private struct VisionTestPanel: View {
     @State private var operation: Task<Void, Never>?
     @State private var generation = UUID()
     @State private var visualConversation: VisualConversation?
+    @State private var captureGate = ReferenceCaptureGate()
+    @State private var cameraTicket: UUID?
+    @State private var cameraTask: Task<Void, Never>?
+    @State private var showsCamera = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Imagem de referência · câmera desligada").font(.headline)
+                    Text("Imagem de referência · sem vídeo ao vivo").font(.headline)
                     if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 230) }
                     Button("Usar cena de teste") { selected = nil; setImage(Self.fixture(), source: "simulation") }
                         .disabled(busy)
                     PhotosPicker("Escolher uma foto", selection: $selected, matching: .images).disabled(busy)
+                    Button("Capturar uma foto") { openCamera() }.disabled(busy)
+                    Text("A câmera tira uma única foto. Confira a imagem antes de enviá-la; capturar não envia nada à API.")
+                        .font(.caption).foregroundStyle(.secondary)
                     TextField("Pergunta sobre a imagem", text: $question, axis: .vertical)
                         .textFieldStyle(.roundedBorder).disabled(busy)
                     Text("Ao tocar em Descrever, esta imagem e sua pergunta serão enviadas à OpenAI. A resposta será falada com a voz do TARS. Análise e voz consomem API; o microfone continua pausado.")
@@ -448,15 +460,45 @@ private struct VisionTestPanel: View {
                     setImage(UIImage(cgImage: thumb), source: "reference")
                 } catch { if !Task.isCancelled { result = "Não consegui carregar a foto." } }
             }
+            .sheet(isPresented: $showsCamera) {
+                if let id = cameraTicket {
+                    ReferenceCamera { captured in
+                        guard captureGate.consume(id) else { return }
+                        showsCamera = false; cameraTicket = nil
+                        if let captured { setImage(captured, source: "reference") }
+                        else { result = "Captura cancelada. Nenhuma imagem enviada." }
+                    }.ignoresSafeArea()
+                }
+            }
+            .onChange(of: showsCamera) { _, visible in
+                if !visible { captureGate.cancel(); cameraTicket = nil }
+            }
             .onAppear { audio.suspendHandsFree() }
             .onDisappear { stop() }
-            .onChange(of: scenePhase) { _, phase in if phase != .active { stop() } }
+            .onChange(of: scenePhase) { _, phase in if phase == .background { stop() } }
         }
     }
     private func stop() {
+        cameraTask?.cancel(); cameraTask = nil; captureGate.cancel(); showsCamera = false; cameraTicket = nil
         generation = UUID(); operation?.cancel(); operation = nil; busy = false
         audio.suspendHandsFree()
         audio.visualRespond = nil; visualConversation?.cancel(); visualConversation = nil
+    }
+    private func openCamera() {
+        stop(); selected = nil; image = nil; png = nil
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            result = "Câmera indisponível neste dispositivo. Use a cena de teste ou escolha uma foto."; return
+        }
+        let id = captureGate.begin()
+        cameraTask = Task { @MainActor in
+            let status = AVCaptureDevice.authorizationStatus(for: .video)
+            let allowed = status == .authorized ? true : status == .notDetermined ? await AVCaptureDevice.requestAccess(for: .video) : false
+            guard !Task.isCancelled, captureGate.accepts(id) else { return }
+            guard allowed else {
+                captureGate.cancel(); result = "Câmera não autorizada. Você pode permitir o acesso nos Ajustes ou escolher uma foto."; return
+            }
+            cameraTicket = id; showsCamera = true
+        }
     }
     private func setImage(_ input: UIImage, source: String) {
         stop()

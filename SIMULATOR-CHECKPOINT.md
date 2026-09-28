@@ -393,3 +393,17 @@ failed loads. Reject overlapping visual questions and responses that finish afte
 the context deadline. Debug build PASS; simulator harness at 15:43:04 PASS for
 replacement/empty new history, mid-response expiry, overlapping request rejection,
 plus all existing visual/audio checks. Core 479 tests PASS. No voice latency change.
+
+## VISION-5 — 28/09/2026
+Explicit still-photo capture added to opt-in Debug vision panel (simulator and
+physical-device Debug). NSCameraUsageDescription included in both configurations.
+No capture/upload on opening panel; camera output is normalized into a reference
+image for review before analysis. No video, Photos-library save or automatic upload.
+Permission/capture callbacks are invalidated on cancellation/replacement/background.
+Debug simulator and unsigned iphoneos builds PASS. Harness at 15:47:21 PASS,
+including cancelled/replaced/single-use camera tickets and prior visual/audio tests.
+This iOS 27 simulator unexpectedly reports camera support and opened native capture.
+UI cancellation returned “Captura cancelada. Nenhuma imagem enviada.” Analysis
+buttons remained disabled. No shutter or API call in this increment. Physical XR,
+actual photo output, denial/restriction and unavailable-camera UI remain unverified.
+Only camera permission additions staged in project.pbxproj; previous edits preserved.
