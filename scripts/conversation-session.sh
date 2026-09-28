@@ -2,6 +2,7 @@
 # Explicit online test: speech, including pre-wake speech, goes to OpenAI.
 # Limits: 15 minutes / 30 audio uploads. Silence is discarded.
 set -eu
+export SIMCTL_CHILD_TARS_STREAM_VOICE="${TARS_STREAM_VOICE:-0}"
 export SIMCTL_CHILD_TARS_ONLINE_WAKE=1
 export SIMCTL_CHILD_TARS_VOICE_SESSION=conversation
 export SIMCTL_CHILD_TARS_VOICE_CHECKS=0

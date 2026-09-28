@@ -16,6 +16,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var inputName = ""
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
+    var streamSpeech: ((String, @escaping @MainActor (Data) throws -> Void) async throws -> Void)?
+    private var streamedPlayer: BufferedVoicePlayer?
+    private let streamingEnabled = ProcessInfo.processInfo.environment["TARS_STREAM_VOICE"] == "1"
     var synthesize: ((String) async throws -> Data)?
     @Published private(set) var voiceSource = "Voz sintetizada local"
     private var speechTask: Task<Void, Never>?
@@ -433,6 +436,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
         #endif
         guard useAI, !naturalVoiceUnavailable, let synthesize else { speakLocally(text); return }
+        if streamingEnabled, let streamSpeech {
+            speakStreamed(text, stream: streamSpeech)
+            return
+        }
         speechTask?.cancel()
         let id = generation
         state = "PREPARING"; status = "PREPARING"
@@ -471,6 +478,56 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 self.naturalVoiceUnavailable = true
                 self.voiceProgress = "Voz natural indisponível; usando a voz local nesta sessão."
                 self.speakLocally(text)
+            }
+        }
+    }
+
+    private func speakStreamed(_ text: String, stream: @escaping (String, @escaping @MainActor (Data) throws -> Void) async throws -> Void) {
+        speechTask?.cancel()
+        let id = generation
+        state = "PREPARING"; status = "PREPARING"; message = text
+        voiceSource = "Voz gerada por IA"; voiceProgress = "Preparando voz natural…"
+        speechTask = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.generation == id else { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            do {
+                let player = try BufferedVoicePlayer()
+                self.streamedPlayer = player
+                player.onStart = { [weak self] in
+                    guard let self, self.generation == id else { return }
+                    self.state = "SPEAKING"; self.status = "SPEAKING"
+                    self.voiceProgress = "Reproduzindo voz natural."
+                    #if DEBUG && targetEnvironment(simulator)
+                    self.recordLatency("voice_until_play_seconds", since: started)
+                    #endif
+                }
+                player.onFinish = { [weak self] in
+                    guard let self, self.generation == id else { return }
+                    self.completedSpeech()
+                }
+                self.timeout = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(95)) } catch { return }
+                    guard let self, self.generation == id else { return }
+                    self.fail("A reprodução não terminou. Voltando à espera.")
+                }
+                try await stream(text) { [weak self] data in
+                    try Task.checkCancellation()
+                    guard let self, self.generation == id else { throw CancellationError() }
+                    try player.append(data)
+                }
+                guard !Task.isCancelled, self.generation == id else { return }
+                try player.finishInput()
+            } catch {
+                guard !Task.isCancelled, self.generation == id else { return }
+                let alreadyPlayed = self.streamedPlayer?.hasStarted ?? false
+                self.streamedPlayer?.stop(); self.streamedPlayer = nil
+                self.naturalVoiceUnavailable = true
+                self.timeout?.cancel(); self.timeout = nil
+                if alreadyPlayed {
+                    self.fail("A voz foi interrompida pela conexão. Não vou repetir a resposta automaticamente.")
+                } else {
+                    self.speakLocally(text)
+                }
             }
         }
     }
@@ -516,6 +573,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         conversationTask?.cancel(); conversationTask = nil
         speechTask?.cancel(); speechTask = nil
         audioPlayer?.stop(); audioPlayer = nil
+        streamedPlayer?.stop(); streamedPlayer = nil
         stopCapture(); utterance = nil
         speaker.stopSpeaking(at: .immediate)
         state = "IDLE"; status = "IDLE"; self.message = message
@@ -646,6 +704,29 @@ extension XRAudioController {
         }
         defer { audio.suspendHandsFree() }
         do {
+            // Silent PCM uses the real AVAudioEngine completion path, no API/microphone.
+            let buffered = try BufferedVoicePlayer()
+            defer { buffered.stop() }
+            var starts = 0
+            var completions = 0
+            buffered.onStart = { starts += 1 }
+            buffered.onFinish = { completions += 1 }
+            try buffered.append(Data(repeating: 0, count: 9600)) // 0.2 seconds
+            try require(!buffered.hasStarted, "Played before prebuffer")
+            try buffered.append(Data(repeating: 0, count: 28800)) // Total 0.8 seconds
+            try require(buffered.hasStarted && starts == 1, "Did not start at prebuffer threshold")
+            try await waitFor { buffered.rebufferCount == 1 }
+            try require(completions == 0, "Network gap mistaken for end of speech")
+            try buffered.append(Data(repeating: 0, count: 4800))
+            try buffered.finishInput() // Final short tail must drain even below threshold.
+            try await waitFor { completions == 1 }
+            try require(starts == 1, "Rebuffer repeated initial callback")
+            let cancelled = try BufferedVoicePlayer()
+            cancelled.onFinish = { completions += 1 }
+            try cancelled.append(Data(repeating: 0, count: 4800))
+            cancelled.stop()
+            try await Task.sleep(for: .milliseconds(100))
+            try require(!cancelled.hasStarted && completions == 1, "Cancelled stream completed or played")
             await audio.enableHandsFree()
             try require(audio.state == "LISTENING", "Initial listening")
             audio.transcript = "conversa ambiente"
@@ -760,10 +841,85 @@ extension XRAudioController {
             natural.cancel()
             natural.speak("Sem repetir chamada paga")
             try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
-            return "PASS: natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }
     }
 }
 #endif
+
+
+/// One continuous PCM timeline, with prebuffering and bounded rebuffering.
+@MainActor
+private final class BufferedVoicePlayer {
+    private let engine = AVAudioEngine()
+    private let node = AVAudioPlayerNode()
+    private let format = AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1)!
+    private var queuedFrames = 0
+    private var totalFrames = 0
+    private var finished = false
+    private var stopped = false
+    private var threshold = 19200 // 0.8 seconds, increased after an underrun.
+    private(set) var hasStarted = false
+    private(set) var rebufferCount = 0
+    var onStart: (() -> Void)?
+    var onFinish: (() -> Void)?
+
+    init() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+        engine.attach(node); engine.connect(node, to: engine.mainMixerNode, format: format)
+        engine.prepare(); try engine.start()
+    }
+    func append(_ data: Data) throws {
+        guard !stopped, !finished, !data.isEmpty, data.count % 2 == 0 else { throw TARSClientError.unavailable }
+        let count = data.count / 2
+        totalFrames += count
+        guard totalFrames <= 2_160_000,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
+              let samples = buffer.floatChannelData?[0] else { throw TARSClientError.unavailable }
+        buffer.frameLength = AVAudioFrameCount(count)
+        data.withUnsafeBytes { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            for i in 0..<count {
+                let value = UInt16(bytes[2*i]) | (UInt16(bytes[2*i+1]) << 8)
+                samples[i] = Float(Int16(bitPattern: value)) / 32768
+            }
+        }
+        queuedFrames += count
+        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor in self?.consumed(count) }
+        }
+        resumeIfReady()
+    }
+    func finishInput() throws {
+        guard !stopped, totalFrames > 0 else { throw TARSClientError.unavailable }
+        finished = true
+        if queuedFrames == 0 { complete() } else { resumeIfReady() }
+    }
+    private func resumeIfReady() {
+        guard !stopped, !node.isPlaying, queuedFrames > 0,
+              finished || queuedFrames >= threshold else { return }
+        node.play()
+        if !hasStarted { hasStarted = true; onStart?() }
+    }
+    private func consumed(_ count: Int) {
+        guard !stopped else { return }
+        queuedFrames -= count
+        if queuedFrames == 0 {
+            if finished { complete() }
+            else { node.pause(); threshold = 38400; rebufferCount += 1 }
+        }
+    }
+    private func complete() {
+        let callback = onFinish
+        stop(); callback?()
+    }
+    func stop() {
+        guard !stopped else { return }
+        stopped = true; onStart = nil; onFinish = nil
+        node.stop(); engine.stop(); queuedFrames = 0
+    }
+}

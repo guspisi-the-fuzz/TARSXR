@@ -138,6 +138,48 @@ final class TARSClient {
         guard reply.ok, let text = reply.data?.text, !text.isEmpty else { throw TARSClientError.unavailable }
         return text
     }
+    func streamSpeech(text: String, receive: @escaping @MainActor (Data) throws -> Void) async throws {
+        try Task.checkCancellation()
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/speech/stream"))
+        request.httpMethod = "POST"; request.timeoutInterval = 35
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              http.value(forHTTPHeaderField: "Content-Type") == "application/x-ndjson" else {
+            throw TARSClientError.unavailable
+        }
+        var line = Data(); var configured = false; var total = 0
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            if byte != 10 {
+                line.append(byte)
+                guard line.count <= 8192 else { throw TARSClientError.unavailable }
+                continue
+            }
+            guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { throw TARSClientError.unavailable }
+            line.removeAll(keepingCapacity: true)
+            if let error = object["error"] as? String { throw TARSClientError.ai(error) }
+            if !configured {
+                guard object["format"] as? String == "pcm_s16le", object["rate"] as? Int == 24000,
+                      object["channels"] as? Int == 1 else { throw TARSClientError.unavailable }
+                configured = true; continue
+            }
+            if object["done"] as? Bool == true {
+                guard total > 0 else { throw TARSClientError.unavailable }
+                return
+            }
+            guard let encoded = object["audio"] as? String, let data = Data(base64Encoded: encoded),
+                  !data.isEmpty, data.count % 2 == 0 else { throw TARSClientError.unavailable }
+            total += data.count
+            guard total <= 4_320_000 else { throw TARSClientError.unavailable }
+            try await receive(data)
+        }
+        throw TARSClientError.unavailable // Truncated stream must never count as completion.
+    }
+
     func synthesize(text: String) async throws -> Data {
         try Task.checkCancellation()
         let body = try JSONSerialization.data(withJSONObject: ["text": text])

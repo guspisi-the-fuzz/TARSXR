@@ -320,3 +320,21 @@ Debug simulator overwrites Documents/voice-latency.json with the last successful
 transcription, response and voice-to-playback durations. No text or audio stored.
 API stages remain sequential, not streaming; this change removes one second of
 endpoint waiting but does not establish a measured end-to-end latency improvement.
+
+## VOICE-16: optional buffered streaming
+
+`TARS_STREAM_VOICE=1 ./scripts/conversation-session.sh` selects streaming; the
+launcher without this variable preserves full MP3 playback. Both use the approved
+Onyx direction and one generation request per utterance. No sentence splitting.
+Core `/v1/speech/stream` sends authenticated NDJSON containing PCM 24 kHz mono
+16-bit little-endian audio and requires an explicit done record. The client rejects
+truncated/oversized streams and cancels the connection when leaving the iterator.
+The audio engine queues 0.8 seconds before starting. If the queue drains before EOF,
+it pauses and buffers 1.6 seconds before resuming; a completed short tail can drain
+immediately. This cannot guarantee gap-free audio when the network stalls.
+Cancellation stops queued sound and drops late callbacks. A failure after playback
+starts never replays the answer automatically; failure before playback can use the
+existing local voice fallback. Requests remain bounded and share the Core's budget.
+Debug tests use silent PCM, so they verify playback lifecycle, not voice quality or
+real network latency. Live comparison with full MP3 remains required before making
+streaming the default. No microphone or paid API call is used by the diagnostic.

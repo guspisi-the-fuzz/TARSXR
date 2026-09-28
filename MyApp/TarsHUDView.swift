@@ -76,6 +76,7 @@ struct TarsHUDView: View {
                 return
             }
             #endif
+            audio.streamSpeech = { text, receive in try await model.streamSpeech(text: text, receive: receive) }
             audio.synthesize = { text in try await model.synthesize(text: text) }
             audio.transcribe = { data in try await model.transcribe(data: data) }
             audio.respond = { text, language in try await model.converse(text: text, language: language) }
