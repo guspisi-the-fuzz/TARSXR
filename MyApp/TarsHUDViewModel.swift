@@ -333,7 +333,7 @@ final class VisualConversation {
         guard active else { throw CancellationError() }
         guard clock()-started >= 0, clock()-started < 180 else { throw TARSClientError.ai("AI_LOCAL_LIMIT") }
         history += [["role":"user", "content":question], ["role":"assistant", "content":answer]]
-        history = Array(history.suffix(4))
+        history = Array(history.suffix(12))
         return answer
     }
 }

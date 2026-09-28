@@ -815,7 +815,7 @@ extension XRAudioController {
                 return "Image answer: " + question
             }
             for index in 0..<6 { _ = try await context.answer("question \(index)") }
-            try require(visualHistories.map(\.count) == [0,2,4,4,4,4], "Visual history not bounded")
+            try require(visualHistories.map(\.count) == [0,2,4,6,8,10], "Visual history not bounded")
             do { _ = try await context.answer("over limit"); throw NSError(domain: "visual budget", code: 1) }
             catch TARSClientError.ai(let code) { try require(code == "AI_LOCAL_LIMIT", "Wrong visual limit") }
             var releaseVisual: CheckedContinuation<String, Never>?
