@@ -426,6 +426,18 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private func routeRecognizedSpeech(_ text: String, capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime) -> String? {
         lastHeard = String(text.prefix(300))
         guard handsFree else { return text }
+        // The explicit visual session already grants conversational attention.
+        // Its owner bounds duration and questions and clears this closure on stop.
+        if visualRespond != nil {
+            let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !question.isEmpty else {
+                cancel(message: "Não detectei fala. Pode perguntar sobre a foto.")
+                return nil
+            }
+            transcript = question
+            voiceProgress = "Pergunta sobre a foto reconhecida; preparando resposta."
+            return question
+        }
         switch voicePolicy.consume(text, now: capturedAt) {
         case .ignore:
             voiceProgress = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -807,16 +819,22 @@ extension XRAudioController {
             visualAudio.respond = { _, _ in throw NSError(domain: "Visual question reached text-only AI", code: 1) }
             visualAudio.visualRespond = { question in routedVisual.append(question); return "Red square." }
             await visualAudio.enableHandsFree()
-            visualAudio.transcript = "TARS what is on the left"
+            visualAudio.transcript = "O que aparece nesta foto?"
             visualAudio.finish()
             try await waitFor { spokenVisual.count == 1 }
             guard let firstVisual = visualAudio.utterance else { throw CancellationError() }
             visualAudio.speechSynthesizer(visualAudio.speaker, didFinish: firstVisual)
             try await waitFor { visualAudio.state == "LISTENING" }
-            visualAudio.transcript = "E qual é a cor?"
+            visualAudio.transcript = "What color is it?"
             visualAudio.finish()
             try await waitFor { spokenVisual.count == 2 }
-            try require(routedVisual.count == 2, "Visual follow-up was not routed")
+            try require(routedVisual == ["O que aparece nesta foto?", "What color is it?"], "Explicit visual conversation must accept either language without wake")
+            visualAudio.suspendHandsFree()
+            visualAudio.visualRespond = nil
+            await visualAudio.enableHandsFree()
+            visualAudio.transcript = "Unrelated ambient speech"
+            visualAudio.finish()
+            try require(routedVisual.count == 2 && spokenVisual.count == 2, "Stopping visual conversation must restore wake gating")
             let vision = XRAudioController()
             defer { vision.suspendHandsFree() }
             var visionOutputs: [String] = []

@@ -432,7 +432,11 @@ private struct VisionTestPanel: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Button("Parar conversa visual") { stop() }
-                        Text("Diga TARS e pergunte sobre a imagem; depois pode continuar sem repetir o nome por 30 segundos.")
+                        Text("Pode perguntar sobre esta foto, sem dizer TARS. A conversa termina em até 3 minutos ou 6 perguntas.")
+                        Text("Áudio: \(audio.status)").font(.caption)
+                        if !audio.lastHeard.isEmpty {
+                            Text("Ouvi: \(audio.lastHeard)").textSelection(.enabled)
+                        }
                         Text(audio.message).textSelection(.enabled)
                     }
                     Text(result).textSelection(.enabled)
