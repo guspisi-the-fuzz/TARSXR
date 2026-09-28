@@ -29,7 +29,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published var useAI = false
     private var tapInstalled = false
     private var generation = UUID()
-    private var lastVoice = Date()
+    private var captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
     private var utterance: AVSpeechUtterance?
     private var interruption: NSObjectProtocol?
     private var handsFree = false
@@ -156,14 +156,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             req.requiresOnDeviceRecognition = handsFree
             req.contextualStrings = ["TARS"]
             request = req
-            transcript = ""; level = 0; lastVoice = Date()
+            transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 req.append(buffer)
                 let amplitude = Self.amplitude(buffer)
                 Task { @MainActor in
                     guard let self, self.generation == id, self.state == "LISTENING" else { return }
                     self.level = self.level * 0.25 + amplitude * 0.75
-                    if amplitude > 0.08 { self.lastVoice = Date() }
+                    if amplitude > 0.08 { self.captureWindow.observeVoice(now: ProcessInfo.processInfo.systemUptime) }
                 }
             }
             tapInstalled = true
@@ -188,18 +188,20 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             }
             engine.prepare(); try engine.start()
             timeout = Task { [weak self] in
-                let began = Date()
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(200))
                     guard !Task.isCancelled, let self, self.generation == id,
                           self.state == "LISTENING" else { return }
-                    let silence = Date().timeIntervalSince(self.lastVoice)
-                    if (!self.transcript.isEmpty && silence > 2.4) || Date().timeIntervalSince(began) > 20 {
-                        self.finish(); return
-                    }
-                    if self.transcript.isEmpty && Date().timeIntervalSince(began) > 15 {
+                    switch self.captureWindow.decision(
+                        now: ProcessInfo.processInfo.systemUptime,
+                        hasTranscript: !self.transcript.isEmpty
+                    ) {
+                    case .finish: self.finish(); return
+                    case .discard:
                         if self.handsFree { self.voicePolicy.reset() }
-                        self.cancel(message: self.handsFree ? "Diga TARS para conversar." : "Não ouvi uma frase."); return
+                        self.cancel(message: self.handsFree ? "Diga TARS para conversar." : "Não ouvi uma frase.")
+                        return
+                    case .keepListening: break
                     }
                 }
             }
@@ -222,15 +224,13 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             recording.isMeteringEnabled = true
             guard recording.record() else { fail("Não foi possível abrir o microfone."); return }
             inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
-            transcript = ""; level = 0; lastVoice = Date()
+            transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
             state = "LISTENING"; status = "LISTENING"
             status = handsFree && !voicePolicy.awaitingRequest ? "WAITING_WAKE_ONLINE" : "LISTENING"
             message = handsFree && !voicePolicy.awaitingRequest
                 ? "Escuta online · PT/EN · diga TARS / say TARS"
                 : "Pode falar em português ou inglês / Speak Portuguese or English."
             timeout = Task { [weak self] in
-                let began = Date()
-                var heardVoice = false
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(100))
                     guard !Task.isCancelled, let self, self.generation == id,
@@ -238,14 +238,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     recorder.updateMeters()
                     let power = Double(recorder.averagePower(forChannel: 0))
                     self.level = min(1, max(0, (power + 55) / 45))
-                    if power > -40 { self.lastVoice = Date(); heardVoice = true }
-                    let elapsed = Date().timeIntervalSince(began)
-                    if heardVoice && (Date().timeIntervalSince(self.lastVoice) > 2.4 || elapsed > 20) {
-                        self.finish(); return
-                    }
-                    if !heardVoice && elapsed > 15 {
+                    if power > -40 { self.captureWindow.observeVoice(now: ProcessInfo.processInfo.systemUptime) }
+                    switch self.captureWindow.decision(now: ProcessInfo.processInfo.systemUptime) {
+                    case .finish: self.finish(); return
+                    case .discard:
                         if self.handsFree { self.voicePolicy.reset() }
-                        self.cancel(message: self.handsFree ? "Aguardando TARS / Waiting for TARS" : "Não detectei fala."); return
+                        self.cancel(message: self.handsFree ? "Aguardando TARS / Waiting for TARS" : "Não detectei fala.")
+                        return
+                    case .keepListening: break
                     }
                 }
             }

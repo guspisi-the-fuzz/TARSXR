@@ -37,3 +37,34 @@ struct OnlineVoiceTrialBudget {
         return true
     }
 }
+
+/// Capture deadlines use uptime, independent of calendar/time-zone corrections.
+struct VoiceCaptureWindow {
+    enum Decision: Equatable { case keepListening, finish, discard }
+    private let startedAt: TimeInterval
+    private var lastVoiceAt: TimeInterval
+    private var heardVoice = false
+    private var invalidClock = false
+
+    init(now: TimeInterval) {
+        startedAt = now
+        lastVoiceAt = now
+        invalidClock = !now.isFinite || now < 0
+    }
+
+    mutating func observeVoice(now: TimeInterval) {
+        guard now.isFinite, now >= lastVoiceAt else { invalidClock = true; return }
+        heardVoice = true
+        lastVoiceAt = now
+    }
+
+    func decision(now: TimeInterval, hasTranscript: Bool = false) -> Decision {
+        guard !invalidClock, now.isFinite, now >= lastVoiceAt else { return .discard }
+        let elapsed = now - startedAt
+        let hasSpeech = heardVoice || hasTranscript
+        if elapsed >= 20 { return hasSpeech ? .finish : .discard }
+        if hasSpeech && now - lastVoiceAt >= 2.4 { return .finish }
+        if !hasSpeech && elapsed >= 15 { return .discard }
+        return .keepListening
+    }
+}

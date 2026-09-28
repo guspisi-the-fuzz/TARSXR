@@ -183,3 +183,19 @@ separado de último resultado de comando. Distâncias vencidas ficam N/A.
 Core com validade individual: 404 testes PASS; app Debug BUILD SUCCEEDED.
 Sem reinstalar/ativar áudio neste incremento. Rollback: reverter apenas este
 commit e o correspondente Core; patch sensors-1-app.patch no workspace.
+
+## VOICE-3 — prazo de captura independente do relógio civil
+
+Captura local e online usam uptime para silêncio e duração, mantendo os limites
+2,4 s após fala, 15 s sem fala e 20 s máximos por captura. Ajustes de data/hora não
+prolongam a gravação. Janela de captura é renovada por interação, sem aproveitar
+fala anterior. Relógio inválido/retrocesso descarta a captura. Política de ativação
+PT/EN e orçamento online de 180 s/6 envios permanecem preservados.
+
+Validação: checks de ativação/prazos, cliente HTTP/cancelamento, reconexão e
+22 casos de pronúncia PASS. Debug Simulator BUILD SUCCEEDED. Nenhuma chamada de
+API, instalação ou ativação de microfone nesta etapa. Qualidade perceptiva do TTS
+e wake local indisponível no simulador continuam sem solução comprovada.
+
+Rollback: reverter apenas o commit VOICE-3; patch voice-3-app.patch no workspace.
+Mudanças preexistentes de pronúncia/project.pbxproj não incluídas.

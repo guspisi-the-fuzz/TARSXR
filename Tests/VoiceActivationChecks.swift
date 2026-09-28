@@ -38,6 +38,29 @@ import Foundation
         expiry.begin(now: 100)
         assert(expiry.available(now: 279))
         assert(!expiry.reserveUpload(now: 280))
-        print("Voice activation PT/EN and bounded online trial checks PASS")
+        let silence = VoiceCaptureWindow(now: 100)
+        assert(silence.decision(now: 114.99) == .keepListening)
+        assert(silence.decision(now: 115) == .discard)
+        var phrase = VoiceCaptureWindow(now: 100)
+        phrase.observeVoice(now: 102)
+        assert(phrase.decision(now: 104.39) == .keepListening)
+        assert(phrase.decision(now: 104.5) == .finish)
+        var continuous = VoiceCaptureWindow(now: 100)
+        for second in 100..<120 {
+            continuous.observeVoice(now: Double(second))
+            assert(continuous.decision(now: Double(second)) == .keepListening)
+        }
+        assert(continuous.decision(now: 120) == .finish)
+        assert(silence.decision(now: 103, hasTranscript: true) == .finish)
+        assert(silence.decision(now: 99) == .discard)
+        assert(silence.decision(now: .infinity) == .discard)
+        assert(silence.decision(now: .nan) == .discard)
+        var invalid = VoiceCaptureWindow(now: 100)
+        invalid.observeVoice(now: 99)
+        assert(invalid.decision(now: 101) == .discard)
+        assert(VoiceCaptureWindow(now: .nan).decision(now: 101) == .discard)
+        // A new capture gets fresh timing, not speech from the previous question.
+        assert(VoiceCaptureWindow(now: 200).decision(now: 203) == .keepListening)
+        print("Voice activation PT/EN, capture deadlines and bounded online trial checks PASS")
     }
 }
