@@ -21,3 +21,19 @@ struct VoiceActivationPolicy {
     mutating func failed() { failures = min(6, failures + 1); awaitingRequest = false }
     mutating func reset() { failures = 0; awaitingRequest = false }
 }
+
+/// A bounded online trial; foreground transitions never refill the allowance.
+struct OnlineVoiceTrialBudget {
+    private(set) var startedAt: TimeInterval?
+    private(set) var uploads = 0
+    mutating func begin(now: TimeInterval) { if startedAt == nil { startedAt = now } }
+    func available(now: TimeInterval) -> Bool {
+        guard let start = startedAt else { return false }
+        return now >= start && now - start < 180 && uploads < 6
+    }
+    mutating func reserveUpload(now: TimeInterval) -> Bool {
+        guard available(now: now) else { return false }
+        uploads += 1
+        return true
+    }
+}

@@ -131,3 +131,26 @@ não um modelo dedicado de wake word. Qualidade/latência continuam por validar.
 
 Rollback: reverter somente VOICE-1, mantendo alterações locais de pronúncia/projeto;
 patch reversível no workspace software/rollback/voice-1.patch.
+
+## VOICE-2 — teste multilíngue online limitado
+
+VOICE-1 falhou na aceitação acústica: reconhecimento local pt-BR indisponível no
+simulador (kLSRErrorDomain/300). Build aprovado não equivale a escuta funcional.
+Usuário autorizou explicitamente um teste online PT/EN após esclarecimento de
+cobrança separada e envio de trechos anteriores à ativação. TARS_ONLINE_WAKE=1
+seleciona o gravador/transcritor multilíngue existente; padrão continua local.
+Detecção da palavra acontece depois da transcrição online, não no dispositivo.
+Silêncio sem fala detectada não gera upload. Apenas frases ativadas chegam à
+conversa; áudio ambiente com fala pode ser transcrito neste modo consentido.
+
+Teste limitado no app a 3 minutos ou 6 uploads, o que ocorrer primeiro. Falhas
+consomem a reserva; foreground não renova o limite. Nova execução do processo
+reinicia a janela, por isso não deixar flag ativa em lançamento de uso diário.
+Não há repetição automática de requisições. Captura para durante respostas.
+Falhas locais alternam pt-BR/en-US e interrompem tentativas após seis erros.
+TTS escolhe a melhor qualidade instalada no idioma detectado, sem baixar vozes
+nem garantia de melhora perceptiva. Acknowledgement curto é bilíngue.
+
+Testes de roteamento PT/EN e limite de tempo/envios aprovados; aceitação real
+pendente do teste no simulador. Correção da ativação LOCAL continua pendente.
+Rollback: reverter apenas o commit VOICE-2; patch software/rollback/voice-2.patch.
