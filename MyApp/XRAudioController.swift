@@ -202,6 +202,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     if let text { self.transcript = text }
                     if final { self.finish() }
                     else if let failureCode {
+                        // Initialization failure is not recovered by repeating the same request.
+                        // Keep online capture opt-in; never upload ambient audio as a fallback.
+                        if failureCode == "kLSRErrorDomain/300" {
+                            self.handsFree = false
+                            self.restartTask?.cancel(); self.restartTask = nil
+                            self.fail("Escuta local indisponível neste dispositivo. No simulador, inicie o teste online autorizado; não há escuta ativa agora.")
+                            return
+                        }
                         let selectedLanguage = self.language == "en-US" ? "inglês" : "português"
                         self.fail("Reconhecimento em \(selectedLanguage) indisponível (\(failureCode)). O teste local está indisponível. Tente novamente.")
                     }
