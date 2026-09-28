@@ -386,3 +386,10 @@ button required; panel explains ambient transcription and repeated image/API use
 Harness PASS (15:36:30) includes PT/EN visual routing, follow-up without wake,
 bounded history/budget and obsolete-answer rejection, plus prior voice regression.
 Debug BUILD SUCCEEDED. No real microphone validation in this harness.
+
+## VISION-4 — 28/09/2026
+Clear old image/context immediately when a new photo starts loading, including
+failed loads. Reject overlapping visual questions and responses that finish after
+the context deadline. Debug build PASS; simulator harness at 15:43:04 PASS for
+replacement/empty new history, mid-response expiry, overlapping request rejection,
+plus all existing visual/audio checks. Core 479 tests PASS. No voice latency change.

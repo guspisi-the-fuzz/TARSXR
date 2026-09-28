@@ -774,6 +774,21 @@ extension XRAudioController {
             cancelledContext.cancel(); releaseVisual?.resume(returning: "obsolete answer")
             do { _ = try await pendingVisual.value; throw NSError(domain: "stale visual answer", code: 1) }
             catch is CancellationError {}
+            var newImageHistory: [[String: String]] = [["role":"user", "content":"sentinel"]]
+            let newImage = VisualConversation { _, history in newImageHistory = history; return "New image" }
+            _ = try await newImage.answer("What now?")
+            try require(newImageHistory.isEmpty, "New image inherited old history")
+            var visualTime: TimeInterval = 0
+            let expiredVisual = VisualConversation(clock: { visualTime }) { _, _ in visualTime = 181; return "late" }
+            do { _ = try await expiredVisual.answer("slow"); throw NSError(domain: "expired answer published", code: 1) }
+            catch TARSClientError.ai(let code) { try require(code == "AI_LOCAL_LIMIT", "Wrong expiry error") }
+            var pendingRelease: CheckedContinuation<String, Never>?
+            let singleVisual = VisualConversation { _, _ in await withCheckedContinuation { pendingRelease = $0 } }
+            let firstPending = Task { try await singleVisual.answer("first") }
+            try await waitFor { pendingRelease != nil }
+            do { _ = try await singleVisual.answer("overlap"); throw NSError(domain: "concurrent visual request", code: 1) }
+            catch TARSClientError.ai(let code) { try require(code == "AI_BUSY", "Wrong overlap error") }
+            pendingRelease?.resume(returning: "first answer"); _ = try await firstPending.value
             let visualAudio = XRAudioController()
             defer { visualAudio.suspendHandsFree() }
             visualAudio.simulatedCapture = {}
@@ -946,7 +961,7 @@ extension XRAudioController {
             natural.cancel()
             natural.speak("Sem repetir chamada paga")
             try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
-            return "PASS: visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

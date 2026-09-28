@@ -311,19 +311,26 @@ final class VisualConversation {
     private var history: [[String: String]] = []
     private var active = true
     private var calls = 0
-    private let started = ProcessInfo.processInfo.systemUptime
+    private let started: TimeInterval
+    private let clock: () -> TimeInterval
+    private var pending = false
     private let describe: (String, [[String: String]]) async throws -> String
-    init(describe: @escaping (String, [[String: String]]) async throws -> String) { self.describe = describe }
+    init(clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, describe: @escaping (String, [[String: String]]) async throws -> String) {
+        self.clock = clock; self.started = clock(); self.describe = describe
+    }
     func cancel() { active = false; history.removeAll() }
     func answer(_ question: String) async throws -> String {
         try Task.checkCancellation()
         guard active else { throw CancellationError() }
-        guard calls < 6, ProcessInfo.processInfo.systemUptime-started < 180 else { throw TARSClientError.ai("AI_LOCAL_LIMIT") }
+        guard calls < 6, clock()-started >= 0, clock()-started < 180 else { throw TARSClientError.ai("AI_LOCAL_LIMIT") }
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, question.count <= 500 else { throw TARSClientError.rejected("Pergunta muito longa ou vazia.") }
+        guard !pending else { throw TARSClientError.ai("AI_BUSY") }
+        pending = true; defer { pending = false }
         calls += 1
         let answer = try await describe(question, history)
         try Task.checkCancellation()
         guard active else { throw CancellationError() }
+        guard clock()-started >= 0, clock()-started < 180 else { throw TARSClientError.ai("AI_LOCAL_LIMIT") }
         history += [["role":"user", "content":question], ["role":"assistant", "content":answer]]
         history = Array(history.suffix(4))
         return answer

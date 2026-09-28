@@ -433,6 +433,8 @@ private struct VisionTestPanel: View {
             .toolbar { Button("Fechar") { dismiss() } }
             .task(id: selected) {
                 guard let selected else { return }
+                stop(); image = nil; png = nil
+                result = "Carregando nova imagem…"
                 do {
                     guard let data = try await selected.loadTransferable(type: Data.self), data.count <= 20_000_000,
                           let source = CGImageSourceCreateWithData(data as CFData, nil),
