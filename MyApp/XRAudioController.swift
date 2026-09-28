@@ -460,6 +460,31 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
 #if DEBUG && targetEnvironment(simulator)
 extension XRAudioController {
+    /// Bounded local-only probe; records capability/error metadata, never speech text.
+    static func runLocalRecognitionProbe() async -> String {
+        var lines: [String] = []
+        for locale in ["pt-BR", "en-US"] {
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
+            lines.append("\(locale): available=\(recognizer?.isAvailable ?? false), onDevice=\(recognizer?.supportsOnDeviceRecognition ?? false)")
+            let audio = XRAudioController()
+            guard !audio.onlineWake else { return "FAIL: online wake must be disabled" }
+            audio.language = locale
+            audio.handsFree = true
+            audio.simulatedOutput = { _ in } // Probe never speaks captured content.
+            await audio.start()
+            for _ in 0..<100 {
+                if audio.status == "UNAVAILABLE" || audio.status == "PERMISSION DENIED" { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            lines.append("state=\(audio.state), status=\(audio.status)")
+            if audio.status == "UNAVAILABLE" || audio.status == "PERMISSION DENIED" {
+                lines.append(audio.message)
+            }
+            audio.suspendHandsFree()
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Runs the production routing/tasks/delegate lifecycle with only I/O replaced.
     static func runSimulatedCycleChecks() async -> String {
         func require(_ condition: Bool, _ message: String) throws {

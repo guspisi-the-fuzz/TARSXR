@@ -220,3 +220,24 @@ pendentes; não confundir esse PASS com aceite de voz de ponta a ponta.
 Rollback: reverter apenas VOICE-4; patch voice-4-app.patch no workspace.
 Arquivos locais de pronúncia e project.pbxproj preservados fora do commit.
 Release Simulator BUILD SUCCEEDED: hooks de captura/saída simuladas excluídos.
+
+## VOICE-5 — diagnóstico real do reconhecimento local
+
+Debug Simulator: TARS_LOCAL_VOICE_PROBE=1, TARS_ONLINE_WAKE=0. Prova com captura
+local de até dez segundos após autorização por idioma, sem Core/API. Registra
+somente capacidades e erros, não conteúdo reconhecido. Saída em
+Documents/local-voice-probe.txt. Diagnóstico encerrado ao concluir.
+
+Resultado real em 28/09/2026, iPhone 18 Pro, runtime iOS 27.0 (24A434):
+pt-BR e en-US anunciam available=true e onDevice=true; ambos falham ao iniciar
+com kLSRErrorDomain/300. Debug Simulator BUILD SUCCEEDED. Portanto a ativação
+local NÃO está validada; capabilities sozinhas não comprovam funcionamento.
+Apple documenta 300 como falha de inicialização, sem identificar uma única causa:
+https://developer.apple.com/documentation/speech/sfspeechrecognitiontask/error
+Não concluir que falta permissão, modelo ou saldo da API apenas por esse código.
+
+Só há iOS 27.0 instalado. Nenhum runtime baixado, simulador apagado ou fallback
+online ativado. Próxima validação acústica local depende de corrigir a inicialização
+ou testar outro runtime; XR físico permanece após software conforme ordem definida.
+O ciclo do controlador com I/O simulado passou em VOICE-4, mas não resolve esta falha.
+Rollback: reverter apenas VOICE-5; patch voice-5-app.patch no workspace.

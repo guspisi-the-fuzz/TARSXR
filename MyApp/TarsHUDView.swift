@@ -14,6 +14,7 @@ struct TarsHUDView: View {
     private var simulatedVoiceChecks: Bool {
         #if DEBUG && targetEnvironment(simulator)
         return ProcessInfo.processInfo.environment["TARS_VOICE_CHECKS"] == "1"
+            || ProcessInfo.processInfo.environment["TARS_LOCAL_VOICE_PROBE"] == "1"
         #else
         return false
         #endif
@@ -56,8 +57,11 @@ struct TarsHUDView: View {
         .task {
             #if DEBUG && targetEnvironment(simulator)
             if simulatedVoiceChecks {
-                let result = await XRAudioController.runSimulatedCycleChecks()
-                let file = URL.documentsDirectory.appendingPathComponent("voice-cycle-checks.txt")
+                let localProbe = ProcessInfo.processInfo.environment["TARS_LOCAL_VOICE_PROBE"] == "1"
+                let result = localProbe
+                    ? await XRAudioController.runLocalRecognitionProbe()
+                    : await XRAudioController.runSimulatedCycleChecks()
+                let file = URL.documentsDirectory.appendingPathComponent(localProbe ? "local-voice-probe.txt" : "voice-cycle-checks.txt")
                 try? result.write(to: file, atomically: true, encoding: .utf8)
                 print(result)
                 return
