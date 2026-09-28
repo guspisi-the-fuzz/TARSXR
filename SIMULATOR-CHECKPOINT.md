@@ -154,3 +154,24 @@ nem garantia de melhora perceptiva. Acknowledgement curto é bilíngue.
 Testes de roteamento PT/EN e limite de tempo/envios aprovados; aceitação real
 pendente do teste no simulador. Correção da ativação LOCAL continua pendente.
 Rollback: reverter apenas o commit VOICE-2; patch software/rollback/voice-2.patch.
+
+## REGRESSION-1 — revisão antes de novas chamadas pagas
+
+Core 801279b: 377 testes PASS. Quatro executáveis Swift PASS: ativação PT/EN e
+limites de teste; reconexão; cliente HTTP com falhas e cancelamento; 22 casos de
+pronúncia. Builds Debug e Release Simulator PASS. Nenhuma chamada externa à API.
+
+Corrigidos dois pontos encontrados na revisão: tarefas de áudio validam geração
+e cancelamento antes de iniciar trabalho; cliente rejeita cancelamento antes de
+pairing/request. Teste comprova zero envios para tarefas previamente canceladas.
+Falhas de cota, limite local, configuração ou autorização pausam voz automática
+até nova execução do app; limite temporário confirmado mantém política progressiva.
+Não repetir requisição paga já enviada. Não retomada automática por foreground
+após falhas permanentes. Deadline não sobrescreve o diagnóstico após bloqueio.
+
+Pendências: ativação local indisponível no simulador; aceitação acústica online
+bloqueada pela recusa de API; nenhuma prova de melhora perceptiva da voz. Core
+não concluído: validade por sensor, supervisão externa e aceitação integrada
+prolongada continuam pendentes. XR e firmware permanecem etapas posteriores.
+Rollback: reverter apenas REGRESSION-1; patch regression-1.patch no workspace.
+Alterações locais de pronúncia/project.pbxproj preservadas e não incluídas.

@@ -49,6 +49,28 @@ final class StubProtocol: URLProtocol {
         do { _ = try await client.command("MOVE"); preconditionFailure("Must fail") }
         catch TARSClientError.unavailable {}
         precondition(StubProtocol.calls == commandStart + 1, "Must never retry movement")
-        print("PASS: pairing rejection, transient failure, token reset/re-pairing, no movement retry")
+        for code in ["AI_INSUFFICIENT_QUOTA", "AI_QUOTA_OR_RATE_LIMIT", "AI_AUTH_FAILED",
+                     "AI_ACCESS_DENIED", "AI_LOCAL_LIMIT", "AI_UNCONFIGURED"] {
+            precondition(TARSClientError.ai(code).blocksAutomaticVoice)
+            StubProtocol.code = 429
+            StubProtocol.body = "{\"error\":\"\(code)\"}"
+            let start = StubProtocol.calls
+            do { _ = try await client.transcribe(data: Data([0])); preconditionFailure("Must fail") }
+            catch let error as TARSClientError { precondition(error.blocksAutomaticVoice) }
+            precondition(StubProtocol.calls == start + 1)
+        }
+        precondition(!TARSClientError.ai("AI_RATE_LIMIT").blocksAutomaticVoice)
+        precondition(!TARSClientError.unavailable.blocksAutomaticVoice)
+        precondition(TARSClientError.pairingRejected.blocksAutomaticVoice)
+        let cancellationStart = StubProtocol.calls
+        await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { try await client.pair(secret: "test"); preconditionFailure("Must cancel") }
+            catch is CancellationError {} catch { preconditionFailure("Wrong error") }
+            do { _ = try await client.transcribe(data: Data([0])); preconditionFailure("Must cancel") }
+            catch is CancellationError {} catch { preconditionFailure("Wrong error") }
+        }.value
+        precondition(StubProtocol.calls == cancellationStart, "Cancelled work must not send")
+        print("PASS: connection, no movement retry, voice failure classification, cancellation without sends")
     }
 }

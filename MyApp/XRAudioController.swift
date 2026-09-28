@@ -33,6 +33,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var utterance: AVSpeechUtterance?
     private var interruption: NSObjectProtocol?
     private var handsFree = false
+    private var voiceServiceBlocked = false
     private var resumeAfterInterruption = false
     private var voicePolicy = VoiceActivationPolicy()
     private var restartTask: Task<Void, Never>?
@@ -46,7 +47,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     func enableHandsFree() async {
-        guard !handsFree else { return }
+        guard !handsFree, !voiceServiceBlocked else { return }
         if onlineWake {
             onlineTrial.begin(now: ProcessInfo.processInfo.systemUptime)
             guard onlineTrial.available(now: ProcessInfo.processInfo.systemUptime) else {
@@ -262,7 +263,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         state = "TRANSCRIBING"; status = "TRANSCRIBING"
         message = "Entendendo sua fala…"
         conversationTask = Task { [weak self] in
-            guard let self else { return }
+            guard let self, !Task.isCancelled, self.generation == id else { return }
             do {
                 if self.handsFree && self.onlineWake {
                     guard self.onlineTrial.reserveUpload(now: ProcessInfo.processInfo.systemUptime) else {
@@ -280,7 +281,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 self.speak(answer)
             } catch {
                 guard !Task.isCancelled, self.generation == id else { return }
-                self.fail(error.localizedDescription)
+                self.failService(error)
             }
         }
     }
@@ -317,14 +318,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             state = "THINKING"; status = "THINKING"
             message = "TARS está pensando…"
             conversationTask = Task { [weak self] in
-                guard let self else { return }
+                guard let self, !Task.isCancelled, self.generation == id else { return }
                 do {
                     let answer = try await respond(text, self.language)
                     guard !Task.isCancelled, self.generation == id else { return }
                     self.speak(answer)
                 } catch {
                     guard !Task.isCancelled, self.generation == id else { return }
-                    self.fail(error.localizedDescription)
+                    self.failService(error)
                 }
             }
             return
@@ -392,6 +393,16 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         state = "IDLE"; status = "IDLE"; self.message = message
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         scheduleListening()
+    }
+
+    private func failService(_ error: Error) {
+        if let clientError = error as? TARSClientError, clientError.blocksAutomaticVoice {
+            voiceServiceBlocked = true
+            handsFree = false
+            restartTask?.cancel(); restartTask = nil
+            trialDeadline?.cancel()
+        }
+        fail(error.localizedDescription)
     }
 
     private func fail(_ message: String) {

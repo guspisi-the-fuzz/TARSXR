@@ -36,6 +36,15 @@ struct ConversationReply: Decodable { let speech: String }
 
 enum TARSClientError: LocalizedError {
     case unavailable, unauthorized, pairingRejected, ai(String), rejected(String)
+    var blocksAutomaticVoice: Bool {
+        switch self {
+        case .pairingRejected: return true
+        case .ai(let code):
+            return ["AI_INSUFFICIENT_QUOTA", "AI_QUOTA_OR_RATE_LIMIT", "AI_AUTH_FAILED",
+                    "AI_ACCESS_DENIED", "AI_LOCAL_LIMIT", "AI_UNCONFIGURED"].contains(code)
+        default: return false
+        }
+    }
     var errorDescription: String? {
         switch self {
         case .unavailable: return "O Core não respondeu. Confira a conexão."
@@ -66,6 +75,7 @@ final class TARSClient {
         self.session = session
     }
     func pair(secret: String) async throws {
+        try Task.checkCancellation()
         var r = URLRequest(url: baseURL.appendingPathComponent("v1/session"))
         r.httpMethod = "POST"; r.timeoutInterval = 10
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -84,6 +94,7 @@ final class TARSClient {
         token = value
     }
     func request(path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+        try Task.checkCancellation()
         var r = URLRequest(url: baseURL.appendingPathComponent(path))
         r.httpMethod = method; r.httpBody = body; r.timeoutInterval = path == "v1/hud" ? 2 : 30
         if let token { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
