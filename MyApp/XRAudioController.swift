@@ -38,6 +38,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var timeout: Task<Void, Never>?
     private var conversationTask: Task<Void, Never>?
     var respond: ((String, String) async throws -> String)?
+    var visualRespond: ((String) async throws -> String)?
     @Published var useAI = false
     private var tapInstalled = false
     private var generation = UUID()
@@ -345,7 +346,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 #if DEBUG && targetEnvironment(simulator)
                 let answerStarted = ProcessInfo.processInfo.systemUptime
                 #endif
-                if self.pipelinedConversation, let streamConversation = self.streamConversation {
+                if self.visualRespond == nil, self.pipelinedConversation, let streamConversation = self.streamConversation {
                     self.speakStreamed(request, isConversation: true) { [weak self] question, receive in
                         var display = ""
                         try await streamConversation(question, receive) { part in
@@ -356,7 +357,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     }
                     return
                 }
-                let answer = try await respond(request, "auto")
+                let answer: String
+                if let visual = self.visualRespond { answer = try await visual(request) }
+                else { answer = try await respond(request, "auto") }
                 guard !Task.isCancelled, self.generation == id else { return }
                 #if DEBUG && targetEnvironment(simulator)
                 self.recordLatency("answer_seconds", since: answerStarted)
@@ -403,7 +406,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             conversationTask = Task { [weak self] in
                 guard let self, !Task.isCancelled, self.generation == id else { return }
                 do {
-                    let answer = try await respond(text, self.language)
+                    let answer: String
+                    if let visual = self.visualRespond { answer = try await visual(text) }
+                    else { answer = try await respond(text, self.language) }
                     guard !Task.isCancelled, self.generation == id else { return }
                     self.speak(answer)
                 } catch {
@@ -753,6 +758,41 @@ extension XRAudioController {
             cancelled.stop()
             try await Task.sleep(for: .milliseconds(100))
             try require(!cancelled.hasStarted && completions == 1, "Cancelled stream completed or played")
+            var visualHistories: [[[String: String]]] = []
+            let context = VisualConversation { question, history in
+                visualHistories.append(history)
+                return "Image answer: " + question
+            }
+            for index in 0..<6 { _ = try await context.answer("question \(index)") }
+            try require(visualHistories.map(\.count) == [0,2,4,4,4,4], "Visual history not bounded")
+            do { _ = try await context.answer("over limit"); throw NSError(domain: "visual budget", code: 1) }
+            catch TARSClientError.ai(let code) { try require(code == "AI_LOCAL_LIMIT", "Wrong visual limit") }
+            var releaseVisual: CheckedContinuation<String, Never>?
+            let cancelledContext = VisualConversation { _, _ in await withCheckedContinuation { releaseVisual = $0 } }
+            let pendingVisual = Task { try await cancelledContext.answer("old image") }
+            try await waitFor { releaseVisual != nil }
+            cancelledContext.cancel(); releaseVisual?.resume(returning: "obsolete answer")
+            do { _ = try await pendingVisual.value; throw NSError(domain: "stale visual answer", code: 1) }
+            catch is CancellationError {}
+            let visualAudio = XRAudioController()
+            defer { visualAudio.suspendHandsFree() }
+            visualAudio.simulatedCapture = {}
+            var routedVisual: [String] = []
+            var spokenVisual: [String] = []
+            visualAudio.simulatedOutput = { spokenVisual.append($0) }
+            visualAudio.respond = { _, _ in throw NSError(domain: "Visual question reached text-only AI", code: 1) }
+            visualAudio.visualRespond = { question in routedVisual.append(question); return "Red square." }
+            await visualAudio.enableHandsFree()
+            visualAudio.transcript = "TARS what is on the left"
+            visualAudio.finish()
+            try await waitFor { spokenVisual.count == 1 }
+            guard let firstVisual = visualAudio.utterance else { throw CancellationError() }
+            visualAudio.speechSynthesizer(visualAudio.speaker, didFinish: firstVisual)
+            try await waitFor { visualAudio.state == "LISTENING" }
+            visualAudio.transcript = "E qual é a cor?"
+            visualAudio.finish()
+            try await waitFor { spokenVisual.count == 2 }
+            try require(routedVisual.count == 2, "Visual follow-up was not routed")
             let vision = XRAudioController()
             defer { vision.suspendHandsFree() }
             var visionOutputs: [String] = []
@@ -906,7 +946,7 @@ extension XRAudioController {
             natural.cancel()
             natural.speak("Sem repetir chamada paga")
             try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
-            return "PASS: early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

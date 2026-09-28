@@ -375,3 +375,14 @@ without capture, cancellation and empty-result rejection. No API calls in harnes
 Debug build passed. Live voice quality for this path still requires listening.
 Core unchanged at 4e98934 (472-test baseline). Existing pronunciation/project edits
 excluded. Rollback: revert this increment's commit; preserve safety state.
+
+## VISION-3 — 28/09/2026
+Explicit visual conversation in simulator panel: same selected image accompanies
+spoken questions; two latest completed exchanges retained only in memory. Context
+expires after 3 minutes or 6 attempts and is removed on close/image replacement.
+Visual route bypasses text-only early-response pipeline; existing TTS retained.
+Opening alone does not start listening. Online-wake launch plus explicit panel
+button required; panel explains ambient transcription and repeated image/API use.
+Harness PASS (15:36:30) includes PT/EN visual routing, follow-up without wake,
+bounded history/budget and obsolete-answer rejection, plus prior voice regression.
+Debug BUILD SUCCEEDED. No real microphone validation in this harness.

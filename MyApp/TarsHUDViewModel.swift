@@ -53,9 +53,9 @@ final class TarsHUDViewModel: ObservableObject {
         try await client.streamSpeech(text: text, conversation: true, receiveText: receiveText, receive: receive)
     }
 
-    func describeImage(png: Data, source: String, question: String) async throws -> VisionReply {
+    func describeImage(png: Data, source: String, question: String, history: [[String: String]] = []) async throws -> VisionReply {
         if client.token == nil { try await client.pair(secret: pairingSecret) }
-        return try await client.describeImage(png: png, source: source, question: question)
+        return try await client.describeImage(png: png, source: source, question: question, history: history)
     }
 
     func synthesize(text: String) async throws -> Data {
@@ -301,5 +301,31 @@ extension ProcessInfo.ThermalState {
         @unknown default:
             return "UNKNOWN"
         }
+    }
+}
+
+
+/// Volatile context for one explicitly selected reference image, never live surroundings.
+@MainActor
+final class VisualConversation {
+    private var history: [[String: String]] = []
+    private var active = true
+    private var calls = 0
+    private let started = ProcessInfo.processInfo.systemUptime
+    private let describe: (String, [[String: String]]) async throws -> String
+    init(describe: @escaping (String, [[String: String]]) async throws -> String) { self.describe = describe }
+    func cancel() { active = false; history.removeAll() }
+    func answer(_ question: String) async throws -> String {
+        try Task.checkCancellation()
+        guard active else { throw CancellationError() }
+        guard calls < 6, ProcessInfo.processInfo.systemUptime-started < 180 else { throw TARSClientError.ai("AI_LOCAL_LIMIT") }
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, question.count <= 500 else { throw TARSClientError.rejected("Pergunta muito longa ou vazia.") }
+        calls += 1
+        let answer = try await describe(question, history)
+        try Task.checkCancellation()
+        guard active else { throw CancellationError() }
+        history += [["role":"user", "content":question], ["role":"assistant", "content":answer]]
+        history = Array(history.suffix(4))
+        return answer
     }
 }

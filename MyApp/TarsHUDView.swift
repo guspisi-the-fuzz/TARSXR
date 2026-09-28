@@ -396,6 +396,7 @@ private struct VisionTestPanel: View {
     @State private var busy = false
     @State private var operation: Task<Void, Never>?
     @State private var generation = UUID()
+    @State private var visualConversation: VisualConversation?
 
     var body: some View {
         NavigationStack {
@@ -412,6 +413,16 @@ private struct VisionTestPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Button(busy ? "Analisando…" : "Descrever imagem") { analyze() }
                         .buttonStyle(.borderedProminent).disabled(png == nil || busy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || question.count > 500)
+                    if visualConversation == nil {
+                        Button("Conversar sobre esta imagem") { startVisualConversation() }
+                            .disabled(png == nil || busy || ProcessInfo.processInfo.environment["TARS_ONLINE_WAKE"] != "1")
+                        Text("Teste de até 3 minutos ou 6 perguntas sobre esta mesma imagem. A escuta online envia trechos de fala à OpenAI, inclusive antes de TARS. Imagem, transcrição, análise e voz consomem API.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button("Parar conversa visual") { stop() }
+                        Text("Diga TARS e pergunte sobre a imagem; depois pode continuar sem repetir o nome por 30 segundos.")
+                        Text(audio.message).textSelection(.enabled)
+                    }
                     Text(result).textSelection(.enabled)
                     Text(audio.voiceProgress).font(.caption).foregroundStyle(.secondary)
                     Text("A descrição se refere apenas à imagem escolhida. Não mede distâncias e não libera movimentos.")
@@ -443,9 +454,10 @@ private struct VisionTestPanel: View {
     private func stop() {
         generation = UUID(); operation?.cancel(); operation = nil; busy = false
         audio.suspendHandsFree()
+        audio.visualRespond = nil; visualConversation?.cancel(); visualConversation = nil
     }
     private func setImage(_ input: UIImage, source: String) {
-        audio.suspendHandsFree()
+        stop()
         generation = UUID(); operation?.cancel(); busy = false; result = "Imagem pronta. Ainda não enviada."
         let scale = min(1, 480 / max(input.size.width, input.size.height))
         let size = CGSize(width: max(1, input.size.width*scale), height: max(1, input.size.height*scale))
@@ -453,9 +465,24 @@ private struct VisionTestPanel: View {
         let clean = UIGraphicsImageRenderer(size: size, format: format).image { _ in input.draw(in: CGRect(origin: .zero, size: size)) }
         self.image = clean; self.png = clean.pngData(); self.source = source
     }
+    private func startVisualConversation() {
+        guard let png, !busy else { return }
+        stop()
+        let imageSource = source
+        let context = VisualConversation { question, history in
+            try await model.describeImage(png: png, source: imageSource, question: question, history: history).description
+        }
+        visualConversation = context
+        audio.visualRespond = { question in try await context.answer(question) }
+        operation = Task { @MainActor in
+            await audio.enableHandsFree()
+            do { try await Task.sleep(for: .seconds(180)) } catch { return }
+            stop()
+        }
+    }
     private func analyze() {
         guard let png, !busy else { return }
-        audio.suspendHandsFree()
+        stop()
         busy = true; result = "Analisando a imagem…"
         let id = UUID(); generation = id
         operation = Task { @MainActor in

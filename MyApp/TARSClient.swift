@@ -141,12 +141,12 @@ final class TARSClient {
         let reply = try JSONDecoder().decode(TARSAPIResponse<TARSRecoveryReply>.self, from: data)
         guard reply.ok, reply.data?.recovered == true else { throw TARSClientError.unavailable }
     }
-    func describeImage(png: Data, source: String, question: String) async throws -> VisionReply {
+    func describeImage(png: Data, source: String, question: String, history: [[String: String]] = []) async throws -> VisionReply {
         try Task.checkCancellation()
         guard !png.isEmpty, png.count <= 1_000_000 else { throw TARSClientError.unavailable }
         let frame: [String: Any] = ["id": UUID().uuidString, "source": source,
             "submitted_at": Date().timeIntervalSince1970, "png": png.base64EncodedString()]
-        let body = try JSONSerialization.data(withJSONObject: ["schema_version":"1.0", "frame":frame, "question":question])
+        let body = try JSONSerialization.data(withJSONObject: ["schema_version":"1.0", "frame":frame, "question":question, "history":history])
         let data = try await request(path: "v1/vision", method: "POST", body: body)
         try Task.checkCancellation()
         let reply = try JSONDecoder().decode(TARSAPIResponse<VisionReply>.self, from: data)
