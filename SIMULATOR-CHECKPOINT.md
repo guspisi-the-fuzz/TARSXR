@@ -365,3 +365,13 @@ simulation, never live camera. Core caps 10 attempts per process and enforces
 TARS_VISION_CHECKS=1 exports only the synthetic fixture locally for PNG compatibility
 checks and suppresses voice capture. This mode makes no network/API request.
 Physical camera, voice-to-vision conversation and XR validation are still pending.
+
+## VISION-2 — 28/09/2026
+Reference-image descriptions now use the existing approved voice pipeline. Opening,
+closing, replacing the image and leaving the panel cancel speech; completion does
+not enable the microphone. Foreground hands-free activation skips the open panel.
+The controller simulator harness passed including PT/EN visual output, completion
+without capture, cancellation and empty-result rejection. No API calls in harness.
+Debug build passed. Live voice quality for this path still requires listening.
+Core unchanged at 4e98934 (472-test baseline). Existing pronunciation/project edits
+excluded. Rollback: revert this increment's commit; preserve safety state.

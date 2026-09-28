@@ -66,7 +66,7 @@ struct TarsHUDView: View {
             .fontDesign(.monospaced)
         }
         #if DEBUG && targetEnvironment(simulator)
-        .sheet(isPresented: $showsVision) { VisionTestPanel(model: model) }
+        .sheet(isPresented: $showsVision) { VisionTestPanel(model: model, audio: audio) }
         .sheet(isPresented: $showsTests) {
             SimulatorTestPanel(model: model)
         }
@@ -97,7 +97,7 @@ struct TarsHUDView: View {
             await model.run()
         }
         .task(id: scenePhase) {
-            guard !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
+            guard !showsVision, !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
             if scenePhase == .active {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
@@ -384,6 +384,8 @@ private struct SimulatorTestPanel: View {
 /// Explicit, one-image reference test. No camera or background upload.
 private struct VisionTestPanel: View {
     @ObservedObject var model: TarsHUDViewModel
+    @ObservedObject var audio: XRAudioController
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var selected: PhotosPickerItem?
     @State private var image: UIImage?
@@ -406,11 +408,12 @@ private struct VisionTestPanel: View {
                     PhotosPicker("Escolher uma foto", selection: $selected, matching: .images).disabled(busy)
                     TextField("Pergunta sobre a imagem", text: $question, axis: .vertical)
                         .textFieldStyle(.roundedBorder).disabled(busy)
-                    Text("Ao tocar em Descrever, esta imagem e sua pergunta serão enviadas à OpenAI, com consumo de API. Não há captura contínua.")
+                    Text("Ao tocar em Descrever, esta imagem e sua pergunta serão enviadas à OpenAI. A resposta será falada com a voz do TARS. Análise e voz consomem API; o microfone continua pausado.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button(busy ? "Analisando…" : "Descrever imagem") { analyze() }
                         .buttonStyle(.borderedProminent).disabled(png == nil || busy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || question.count > 500)
                     Text(result).textSelection(.enabled)
+                    Text(audio.voiceProgress).font(.caption).foregroundStyle(.secondary)
                     Text("A descrição se refere apenas à imagem escolhida. Não mede distâncias e não libera movimentos.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
@@ -432,10 +435,17 @@ private struct VisionTestPanel: View {
                     setImage(UIImage(cgImage: thumb), source: "reference")
                 } catch { if !Task.isCancelled { result = "Não consegui carregar a foto." } }
             }
-            .onDisappear { generation = UUID(); operation?.cancel(); operation = nil }
+            .onAppear { audio.suspendHandsFree() }
+            .onDisappear { stop() }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { stop() } }
         }
     }
+    private func stop() {
+        generation = UUID(); operation?.cancel(); operation = nil; busy = false
+        audio.suspendHandsFree()
+    }
     private func setImage(_ input: UIImage, source: String) {
+        audio.suspendHandsFree()
         generation = UUID(); operation?.cancel(); busy = false; result = "Imagem pronta. Ainda não enviada."
         let scale = min(1, 480 / max(input.size.width, input.size.height))
         let size = CGSize(width: max(1, input.size.width*scale), height: max(1, input.size.height*scale))
@@ -445,6 +455,7 @@ private struct VisionTestPanel: View {
     }
     private func analyze() {
         guard let png, !busy else { return }
+        audio.suspendHandsFree()
         busy = true; result = "Analisando a imagem…"
         let id = UUID(); generation = id
         operation = Task { @MainActor in
@@ -453,6 +464,7 @@ private struct VisionTestPanel: View {
                 let reply = try await model.describeImage(png: png, source: source, question: question)
                 guard !Task.isCancelled, generation == id else { return }
                 result = reply.description
+                audio.speakVisionDescription(reply.description)
             } catch {
                 guard !Task.isCancelled, generation == id else { return }
                 result = error.localizedDescription

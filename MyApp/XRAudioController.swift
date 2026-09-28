@@ -447,6 +447,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
               : "Olá! Eu sou o TARS. Minha saída de áudio está pronta para o teste.")
     }
 
+    /// Explicit reference-image output never starts or resumes microphone capture.
+    func speakVisionDescription(_ text: String) {
+        suspendHandsFree()
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 2000 else { return }
+        useAI = true
+        speak(text)
+    }
+
     private func speak(_ text: String) {
         #if DEBUG && targetEnvironment(simulator)
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
@@ -621,7 +629,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     private func completedSpeech() {
         if handsFree && !voicePolicy.awaitingRequest { voicePolicy.replyFinished() }
-        voiceProgress = voicePolicy.awaitingRequest
+        voiceProgress = !handsFree ? "Resposta concluída. Escuta pausada." : voicePolicy.awaitingRequest
             ? "Pode fazer sua pergunta."
             : "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."
         cancel(message: handsFree ? "Aguardando sua voz…" : "Resposta concluída.")
@@ -745,6 +753,23 @@ extension XRAudioController {
             cancelled.stop()
             try await Task.sleep(for: .milliseconds(100))
             try require(!cancelled.hasStarted && completions == 1, "Cancelled stream completed or played")
+            let vision = XRAudioController()
+            defer { vision.suspendHandsFree() }
+            var visionOutputs: [String] = []
+            var visionCaptures = 0
+            vision.simulatedOutput = { visionOutputs.append($0) }
+            vision.simulatedCapture = { visionCaptures += 1 }
+            vision.speakVisionDescription("Quadrado vermelho à esquerda.")
+            try require(visionOutputs.count == 1 && !vision.handsFree && vision.useAI, "Vision must use approved voice without listening")
+            guard let visualUtterance = vision.utterance else { throw CancellationError() }
+            vision.speechSynthesizer(vision.speaker, didFinish: visualUtterance)
+            try await Task.sleep(for: .milliseconds(100))
+            try require(visionCaptures == 0 && vision.state == "IDLE", "Vision completion started microphone")
+            vision.speakVisionDescription("Blue circle on the right.")
+            vision.suspendHandsFree()
+            try require(vision.state == "IDLE" && vision.utterance == nil, "Vision cancellation failed")
+            vision.speakVisionDescription("  ")
+            try require(visionOutputs.count == 2, "Empty vision response was spoken")
             let early = XRAudioController()
             defer { early.suspendHandsFree() }
             early.simulatedCapture = {}
