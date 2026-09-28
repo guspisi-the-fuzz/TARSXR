@@ -2,7 +2,7 @@ import Foundation
 @main struct Checks {
     static func main() {
         var p = VoiceActivationPolicy()
-        for ambient in ["olá", "stars", "tarsiano", "como está o tempo", ""] {
+        for ambient in ["olá", "stars", "tarsiano", "como está o tempo", "Hi Carlos", "Hi Thaís", "Karen", ""] {
             assert(p.consume(ambient) == .ignore)
         }
         assert(p.consume("Ei, TARS!") == .acknowledge)
