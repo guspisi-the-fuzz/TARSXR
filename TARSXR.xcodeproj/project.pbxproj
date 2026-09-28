@@ -169,7 +169,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.6.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -233,7 +233,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.6.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -256,6 +256,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "O TARS conecta ao Core no seu Mac pela rede local.";
+				INFOPLIST_FILE = Config/TARS-Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "O TARS captura uma foto quando você solicita. A imagem só é enviada à IA após sua ação de análise.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O TARS usa o microfone quando você toca em Falar.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O TARS transcreve sua fala para o teste de áudio. O reconhecimento pode usar o serviço da Apple.";
@@ -298,6 +300,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "O TARS conecta ao Core no seu Mac pela rede local.";
+				INFOPLIST_FILE = Config/TARS-Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "O TARS captura uma foto quando você solicita. A imagem só é enviada à IA após sua ação de análise.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O TARS usa o microfone quando você toca em Falar.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O TARS transcreve sua fala para o teste de áudio. O reconhecimento pode usar o serviço da Apple.";

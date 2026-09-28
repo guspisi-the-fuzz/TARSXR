@@ -419,3 +419,13 @@ Generated PNG accepted by Core validate_png: 480x320, 3357 bytes.
 Debug simulator and unsigned iphoneos builds PASS. Zero API calls. These are
 injected permission/UIImage tests, not physical XR camera or OS permission UI tests.
 Core unchanged at a544699; latest full Core regression remains 479 PASS.
+
+## XR-PREP-1 — 28/09/2026
+Deployment target corrected from iOS 27 to iOS 18. Debug physical-device builds
+can now honor TARS_CORE_URL; simulator behavior unchanged. Local-network purpose
+and scoped NSAllowsLocalNetworking added (no arbitrary-load exception).
+Unsigned iphoneos build PASS; generated plist confirms MinimumOSVersion 18.0
+and nested ATS local-network exception. No signing identities or physical XR
+reported by devicectl. Installation still requires device trust, Apple signing,
+and actual Mac LAN hostname/address configuration. Core remains loopback; no LAN
+listener activated. Existing project edits excluded from this commit.

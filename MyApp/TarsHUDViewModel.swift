@@ -35,7 +35,7 @@ final class TarsHUDViewModel: ObservableObject {
     private let client: TARSClient
 
     init(baseURL: URL, pairingSecret: String) {
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         let baseURL = ProcessInfo.processInfo.environment["TARS_CORE_URL"].flatMap(URL.init(string:)) ?? baseURL
         #endif
         self.baseURL = baseURL
