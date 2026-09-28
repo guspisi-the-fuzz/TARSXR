@@ -3,6 +3,14 @@ import SwiftUI
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
     @State private var showsTests = false
+    // Manual controls are opt-in diagnostics, never the normal interaction flow.
+    private var manualDiagnostics: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return ProcessInfo.processInfo.environment["TARS_MANUAL_DIAGNOSTICS"] == "1"
+        #else
+        return false
+        #endif
+    }
     @StateObject private var audio = XRAudioController()
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
@@ -12,13 +20,20 @@ struct TarsHUDView: View {
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
                 #if DEBUG && targetEnvironment(simulator)
+                if manualDiagnostics {
                 Button { showsTests = true } label: {
                     Label("Painel de Testes", systemImage: "slider.horizontal.3")
                         .frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
                 .buttonStyle(.bordered).tint(.cyan).padding(.horizontal, 16)
+                }
                 #endif
-                AudioControls(audio: audio)
+                if manualDiagnostics {
+                    AudioControls(audio: audio)
+                } else {
+                    Text("Voz automática em desenvolvimento")
+                        .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
+                }
                 Rectangle().frame(height: 1).foregroundStyle(.green)
                 EngineeringPanel(model: model, audioStatus: audio.status)
                     .frame(maxHeight: .infinity)

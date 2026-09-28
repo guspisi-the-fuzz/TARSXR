@@ -91,3 +91,19 @@ Alterações de áudio e project.pbxproj presentes na árvore foram preservadas 
 excluídas deste commit. Rollback: reverter somente o commit RECOVERY-2 do app;
 patch reversível verificado no workspace. Não usar reset --hard ou descartar as
 alterações locais. Para rollback do Core, consultar RECOVERY-2.md naquele repo.
+
+## UI-3 — controles manuais fora do fluxo normal
+
+A tela normal não apresenta Painel de Testes, Falar, Testar voz, Concluir,
+Cancelar ou alternância de IA. As ferramentas existentes ficam preservadas
+somente em Debug Simulator com TARS_MANUAL_DIAGNOSTICS=1. Não foi ativada
+captura automática: a interface informa que voz automática está em desenvolvimento.
+O retry de autorização continua disponível quando necessário.
+
+Validação: suíte atual do Core c0069f9, 371 testes aprovados; compilação Debug
+Simulator aprovada. Isso não conclui validade por sensor nem aceitação integrada.
+A reclamação sobre botões não foi diagnosticada como falha resolvida; o painel
+manual foi retirado do fluxo normal por solicitação do usuário.
+Alterações locais de pronúncia e projeto preservadas, fora deste commit.
+Rollback: git revert do commit UI-3; patch reversível no workspace em
+software/rollback/ui-3.patch. Não remover estado persistente de segurança.
