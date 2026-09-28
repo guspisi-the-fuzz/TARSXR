@@ -43,6 +43,11 @@ final class TarsHUDViewModel: ObservableObject {
         self.client = TARSClient(baseURL: baseURL)
     }
 
+    func synthesize(text: String) async throws -> Data {
+        if client.token == nil { try await client.pair(secret: pairingSecret) }
+        return try await client.synthesize(text: text)
+    }
+
     func converse(text: String, language: String) async throws -> String {
         if client.token == nil { try await client.pair(secret: pairingSecret) }
         return try await client.converse(text: text, language: language)

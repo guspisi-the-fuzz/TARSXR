@@ -62,9 +62,18 @@ final class StubProtocol: URLProtocol {
         precondition(!TARSClientError.ai("AI_RATE_LIMIT").blocksAutomaticVoice)
         precondition(!TARSClientError.unavailable.blocksAutomaticVoice)
         precondition(TARSClientError.pairingRejected.blocksAutomaticVoice)
+        StubProtocol.code = 200
+        StubProtocol.body = "{\"ok\":true,\"data\":{\"audio\":\"YWJj\",\"format\":\"mp3\"}}"
+        let speech = try await client.synthesize(text: "Olá")
+        precondition(speech == Data("abc".utf8))
+        StubProtocol.body = "{\"ok\":true,\"data\":{\"audio\":\"YWJj\",\"format\":\"unknown\"}}"
+        do { _ = try await client.synthesize(text: "Olá"); preconditionFailure("Invalid format") }
+        catch TARSClientError.unavailable {}
         let cancellationStart = StubProtocol.calls
         await Task {
             withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await client.synthesize(text: "Cancelled speech"); preconditionFailure("Must cancel") }
+            catch is CancellationError {} catch { preconditionFailure("Wrong error") }
             do { try await client.pair(secret: "test"); preconditionFailure("Must cancel") }
             catch is CancellationError {} catch { preconditionFailure("Wrong error") }
             do { _ = try await client.transcribe(data: Data([0])); preconditionFailure("Must cancel") }

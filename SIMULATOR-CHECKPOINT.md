@@ -273,3 +273,24 @@ Aceitação com fala real permanece para o teste do usuário após implantação
 Controlador reexecutado no iOS Simulator, resultado novo às 00:56:36: PASS,
 incluindo pergunta subsequente sem wake, callback antigo e resposta cancelada.
 Rollback: reverter VOICE-8; patch voice-8-app.patch no workspace.
+
+## VOICE-9 — voz natural e alternativa local
+
+App integrado ao endpoint autenticado /v1/speech do Core: MP3 com Cedar,
+instrução de ritmo calmo e português brasileiro, mesmas palavras da resposta.
+Identificação de voz gerada por IA na tela. Chave permanece somente no Core.
+Se geração/inicialização falha, usa voz local pelo restante da sessão, sem repetir
+chamadas pagas; falha durante reprodução encerra turno e usa local no próximo
+caso de erro de decodificação. Cancelamento invalida áudio atrasado; callback de
+conclusão mantém janela de conversa. Limite de reprodução 90 s.
+
+Core: 430 PASS. Cliente Swift (formato/cancelamento/reconexão) PASS.
+Controlador real no simulador com WAV silencioso: conclusão, cancelamento,
+alternativa sem reenvio e regressão de conversa PASS às 01:06:18.
+Debug BUILD SUCCEEDED. Amostra real portuguesa gerada com uma chamada paga,
+8,4 s, MP3 24 kHz. Qualidade perceptiva ainda sem aprovação do usuário.
+O teste online conserva 180 s/6 uploads; Core aceita seis gerações de voz por
+processo. Reinício reseta a cota de desenvolvimento; não é teto de gastos mensal.
+Rollback voice-9-app.patch e voice-9-core.patch no workspace. Não incluídos os
+arquivos preexistentes de pronúncia e project.pbxproj.
+Release Simulator BUILD SUCCEEDED.

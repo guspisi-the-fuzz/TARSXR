@@ -5,7 +5,7 @@ import NaturalLanguage
 import UIKit
 
 @MainActor
-final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     @Published private(set) var state = "IDLE"
     @Published private(set) var status = "NOT ENABLED"
     @Published private(set) var transcript = ""
@@ -16,6 +16,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var inputName = ""
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
+    var synthesize: ((String) async throws -> Data)?
+    @Published private(set) var voiceSource = "Voz sintetizada local"
+    private var speechTask: Task<Void, Never>?
+    private var audioPlayer: AVAudioPlayer?
+    private var naturalVoiceUnavailable = false
     private var language = "pt-BR"
     // Explicitly enabled only after consent to online wake transcription.
     private let onlineWake = ProcessInfo.processInfo.environment["TARS_ONLINE_WAKE"] == "1"
@@ -45,6 +50,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     // Explicit diagnostic injection; absent from release and normal launches.
     private var simulatedCapture: (() -> Void)?
     private var simulatedOutput: ((String) -> Void)?
+    private var testNaturalVoice = false
     #endif
 
     private func endOnlineTrial() {
@@ -395,6 +401,48 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     private func speak(_ text: String) {
         #if DEBUG && targetEnvironment(simulator)
+        if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
+        #endif
+        guard useAI, !naturalVoiceUnavailable, let synthesize else { speakLocally(text); return }
+        speechTask?.cancel()
+        let id = generation
+        state = "PREPARING"; status = "PREPARING"
+        message = text
+        voiceSource = "Voz gerada por IA · Cedar"
+        voiceProgress = "Preparando voz natural…"
+        speechTask = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.generation == id else { return }
+            do {
+                let data = try await synthesize(text)
+                guard !Task.isCancelled, self.generation == id else { return }
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .spokenAudio)
+                try session.setActive(true)
+                let player = try AVAudioPlayer(data: data)
+                guard player.duration > 0, player.duration <= 90 else { throw TARSClientError.unavailable }
+                self.audioPlayer = player
+                player.delegate = self
+                guard player.play() else { throw TARSClientError.unavailable }
+                self.state = "SPEAKING"; self.status = "SPEAKING"
+                self.voiceProgress = "Reproduzindo voz natural."
+                self.timeout = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(95)) } catch { return }
+                    guard let self, self.generation == id, self.audioPlayer != nil else { return }
+                    self.fail("A reprodução não terminou. Voltando à espera.")
+                }
+            } catch {
+                guard !Task.isCancelled, self.generation == id else { return }
+                self.audioPlayer?.stop(); self.audioPlayer = nil
+                self.naturalVoiceUnavailable = true
+                self.voiceProgress = "Voz natural indisponível; usando a voz local nesta sessão."
+                self.speakLocally(text)
+            }
+        }
+    }
+
+    private func speakLocally(_ text: String) {
+        voiceSource = naturalVoiceUnavailable ? "Voz local · alternativa ativa" : "Voz sintetizada local"
+        #if DEBUG && targetEnvironment(simulator)
         if let simulatedOutput {
             utterance = AVSpeechUtterance(string: text)
             state = "SPEAKING"; status = "SPEAKING"
@@ -431,6 +479,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     func cancel(message: String = "Interação encerrada.") {
         conversationTask?.cancel(); conversationTask = nil
+        speechTask?.cancel(); speechTask = nil
+        audioPlayer?.stop(); audioPlayer = nil
         stopCapture(); utterance = nil
         speaker.stopSpeaking(at: .immediate)
         state = "IDLE"; status = "IDLE"; self.message = message
@@ -458,6 +508,32 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         cancel(message: message); status = "UNAVAILABLE"
     }
 
+    private func completedSpeech() {
+        if handsFree && !voicePolicy.awaitingRequest { voicePolicy.replyFinished() }
+        voiceProgress = voicePolicy.awaitingRequest
+            ? "Pode fazer sua pergunta."
+            : "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."
+        cancel(message: handsFree ? "Aguardando sua voz…" : "Resposta concluída.")
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let identifier = ObjectIdentifier(player)
+        Task { @MainActor in
+            guard let current = self.audioPlayer, ObjectIdentifier(current) == identifier else { return }
+            if flag { self.completedSpeech() }
+            else { self.fail("A reprodução foi interrompida. Tente uma nova pergunta.") }
+        }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let identifier = ObjectIdentifier(player)
+        Task { @MainActor in
+            guard let current = self.audioPlayer, ObjectIdentifier(current) == identifier else { return }
+            self.naturalVoiceUnavailable = true
+            self.fail("Falha na reprodução. A próxima resposta usará a voz local.")
+        }
+    }
+
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         let identifier = ObjectIdentifier(utterance)
         Task { @MainActor in
@@ -470,11 +546,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let identifier = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard let current = self.utterance, ObjectIdentifier(current) == identifier else { return }
-            if self.handsFree && !self.voicePolicy.awaitingRequest {
-                self.voicePolicy.replyFinished()
-            }
-            self.voiceProgress = "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."
-            self.cancel(message: self.handsFree ? "Aguardando sua voz…" : "Resposta concluída.")
+            self.completedSpeech()
         }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
@@ -616,7 +688,44 @@ extension XRAudioController {
             try await Task.sleep(for: .milliseconds(750))
             try require(audio.state == "IDLE" && captures == stoppedCaptures,
                         "Permanent failure restarted capture")
-            return "PASS: controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            let natural = XRAudioController()
+            defer { natural.suspendHandsFree() }
+            natural.simulatedCapture = {}
+            natural.testNaturalVoice = true
+            var fallback: [String] = []
+            natural.simulatedOutput = { fallback.append($0) }
+            var generations = 0
+            // A short silent WAV exercises AVAudioPlayer and its real completion delegate.
+            var fixture = Data([82,73,70,70,100,31,0,0,87,65,86,69,102,109,116,32,
+                                16,0,0,0,1,0,1,0,128,62,0,0,0,125,0,0,2,0,16,0,
+                                100,97,116,97,64,31,0,0])
+            fixture.append(Data(repeating: 0, count: 8000))
+            natural.synthesize = { _ in generations += 1; return fixture }
+            await natural.enableHandsFree()
+            natural.stopCapture()
+            natural.speak("Resposta natural")
+            try await waitFor { natural.voicePolicy.acceptsFollowUp() }
+            try require(generations == 1 && fallback.isEmpty, "Natural playback did not finish normally")
+            natural.suspendHandsFree()
+            var pendingAudio: CheckedContinuation<Data, Never>?
+            natural.synthesize = { _ in await withCheckedContinuation { pendingAudio = $0 } }
+            await natural.enableHandsFree()
+            natural.stopCapture()
+            natural.speak("Resposta cancelada")
+            try await waitFor { pendingAudio != nil }
+            natural.suspendHandsFree()
+            pendingAudio?.resume(returning: fixture); pendingAudio = nil
+            try await Task.sleep(for: .milliseconds(50))
+            try require(natural.audioPlayer == nil && fallback.isEmpty, "Cancelled audio played")
+            natural.synthesize = { _ in generations += 1; throw TARSClientError.unavailable }
+            await natural.enableHandsFree()
+            natural.stopCapture()
+            natural.speak("Alternativa local")
+            try await waitFor { fallback.count == 1 }
+            natural.cancel()
+            natural.speak("Sem repetir chamada paga")
+            try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
+            return "PASS: natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

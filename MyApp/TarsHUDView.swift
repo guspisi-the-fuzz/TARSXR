@@ -41,6 +41,7 @@ struct TarsHUDView: View {
                 } else {
                     VStack(spacing: 4) {
                         Text(audio.message)
+                        Text(audio.voiceSource).font(.caption2)
                         if !audio.lastHeard.isEmpty {
                             Text("Ouvi: \(audio.lastHeard)").foregroundStyle(.cyan).lineLimit(3)
                         }
@@ -75,6 +76,7 @@ struct TarsHUDView: View {
                 return
             }
             #endif
+            audio.synthesize = { text in try await model.synthesize(text: text) }
             audio.transcribe = { data in try await model.transcribe(data: data) }
             audio.respond = { text, language in try await model.converse(text: text, language: language) }
             await model.run()

@@ -31,6 +31,7 @@ struct TARSTelemetry: Decodable {
     }
 }
 struct TARSAPIResponse<T: Decodable>: Decodable { let ok: Bool; let data: T? }
+struct SpeechReply: Decodable { let audio: String; let format: String }
 struct TranscriptionReply: Decodable { let text: String }
 struct ConversationReply: Decodable { let speech: String }
 
@@ -136,6 +137,17 @@ final class TARSClient {
         let reply = try JSONDecoder().decode(TARSAPIResponse<TranscriptionReply>.self, from: result)
         guard reply.ok, let text = reply.data?.text, !text.isEmpty else { throw TARSClientError.unavailable }
         return text
+    }
+    func synthesize(text: String) async throws -> Data {
+        try Task.checkCancellation()
+        let body = try JSONSerialization.data(withJSONObject: ["text": text])
+        let result = try await request(path: "v1/speech", method: "POST", body: body)
+        try Task.checkCancellation()
+        let reply = try JSONDecoder().decode(TARSAPIResponse<SpeechReply>.self, from: result)
+        guard reply.ok, let speech = reply.data, speech.format == "mp3",
+              speech.audio.count <= 2_666_668, let audio = Data(base64Encoded: speech.audio),
+              !audio.isEmpty, audio.count <= 2_000_000 else { throw TARSClientError.unavailable }
+        return audio
     }
     func converse(text: String, language: String) async throws -> String {
         let body = try JSONSerialization.data(withJSONObject: ["text": text, "language": language,
