@@ -491,11 +491,14 @@ private struct VisionTestPanel: View {
         }
         let id = captureGate.begin()
         cameraTask = Task { @MainActor in
-            let status = AVCaptureDevice.authorizationStatus(for: .video)
-            let allowed = status == .authorized ? true : status == .notDetermined ? await AVCaptureDevice.requestAccess(for: .video) : false
+            let access = await ReferenceCameraAccess.check()
             guard !Task.isCancelled, captureGate.accepts(id) else { return }
-            guard allowed else {
+            switch access {
+            case .denied:
                 captureGate.cancel(); result = "Câmera não autorizada. Você pode permitir o acesso nos Ajustes ou escolher uma foto."; return
+            case .unavailable:
+                captureGate.cancel(); result = "Câmera indisponível. Escolha uma foto ou use a cena de teste."; return
+            case .ready: break
             }
             cameraTicket = id; showsCamera = true
         }
@@ -503,11 +506,10 @@ private struct VisionTestPanel: View {
     private func setImage(_ input: UIImage, source: String) {
         stop()
         generation = UUID(); operation?.cancel(); busy = false; result = "Imagem pronta. Ainda não enviada."
-        let scale = min(1, 480 / max(input.size.width, input.size.height))
-        let size = CGSize(width: max(1, input.size.width*scale), height: max(1, input.size.height*scale))
-        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.preferredRange = .standard
-        let clean = UIGraphicsImageRenderer(size: size, format: format).image { _ in input.draw(in: CGRect(origin: .zero, size: size)) }
-        self.image = clean; self.png = clean.pngData(); self.source = source
+        guard let normalized = ReferencePhoto.normalize(input) else {
+            image = nil; png = nil; result = "Não consegui preparar essa foto. Tente outra imagem."; return
+        }
+        self.image = normalized.image; self.png = normalized.png; self.source = source
     }
     private func startVisualConversation() {
         guard let png, !busy else { return }

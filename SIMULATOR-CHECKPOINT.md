@@ -407,3 +407,15 @@ UI cancellation returned “Captura cancelada. Nenhuma imagem enviada.” Analys
 buttons remained disabled. No shutter or API call in this increment. Physical XR,
 actual photo output, denial/restriction and unavailable-camera UI remain unverified.
 Only camera permission additions staged in project.pbxproj; previous edits preserved.
+
+## VISION-6 — 28/09/2026
+Camera access now uses testable authorization routing: unavailable skips prompt,
+denied/restricted do not request again, grant/deny handled, availability rechecked
+after awaiting permission. Photo normalization rejects empty input, flattens onto
+white, limits to 480px/1MB PNG and re-renders instead of forwarding source metadata.
+Harness fresh 15:52:12 PASS for permission branches, disconnect during authorization,
+photo preparation, delegate single completion/cancel, plus previous vision/voice.
+Generated PNG accepted by Core validate_png: 480x320, 3357 bytes.
+Debug simulator and unsigned iphoneos builds PASS. Zero API calls. These are
+injected permission/UIImage tests, not physical XR camera or OS permission UI tests.
+Core unchanged at a544699; latest full Core regression remains 479 PASS.
