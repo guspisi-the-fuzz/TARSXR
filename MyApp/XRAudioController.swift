@@ -39,6 +39,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var restartTask: Task<Void, Never>?
     private var onlineTrial = OnlineVoiceTrialBudget()
     private var trialDeadline: Task<Void, Never>?
+    #if DEBUG && targetEnvironment(simulator)
+    // Explicit diagnostic injection; absent from release and normal launches.
+    private var simulatedCapture: (() -> Void)?
+    private var simulatedOutput: ((String) -> Void)?
+    #endif
 
     private func endOnlineTrial() {
         suspendHandsFree()
@@ -111,6 +116,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
         generation = UUID()
         let id = generation
+        #if DEBUG && targetEnvironment(simulator)
+        if let simulatedCapture {
+            state = "LISTENING"
+            status = voicePolicy.awaitingRequest ? "LISTENING" : "WAITING_WAKE"
+            simulatedCapture()
+            return
+        }
+        #endif
         state = "AUTHORIZING"
         message = "Aguardando permissão de microfone e reconhecimento."
         if useAI && (!handsFree || onlineWake) {
@@ -359,6 +372,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     private func speak(_ text: String) {
+        #if DEBUG && targetEnvironment(simulator)
+        if let simulatedOutput {
+            utterance = AVSpeechUtterance(string: text)
+            state = "SPEAKING"; status = "SPEAKING"
+            simulatedOutput(text)
+            return
+        }
+        #endif
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
@@ -436,3 +457,105 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
     }
 }
+
+#if DEBUG && targetEnvironment(simulator)
+extension XRAudioController {
+    /// Runs the production routing/tasks/delegate lifecycle with only I/O replaced.
+    static func runSimulatedCycleChecks() async -> String {
+        func require(_ condition: Bool, _ message: String) throws {
+            if !condition { throw NSError(domain: "VoiceCycleChecks", code: 1,
+                                          userInfo: [NSLocalizedDescriptionKey: message]) }
+        }
+        func waitFor(_ predicate: () -> Bool) async throws {
+            for _ in 0..<250 {
+                if predicate() { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try require(false, "Timed out waiting for voice transition")
+        }
+        let audio = XRAudioController()
+        guard !audio.onlineWake else { return "FAIL: disable online wake for offline checks" }
+        var requests: [String] = []
+        var outputs: [String] = []
+        var captures = 0
+        audio.simulatedCapture = { captures += 1 }
+        audio.simulatedOutput = { outputs.append($0) }
+        audio.respond = { text, _ in
+            requests.append(text)
+            return text.contains("English") ? "Hello, I'm TARS." : "Olá, sou o TARS."
+        }
+        defer { audio.suspendHandsFree() }
+        do {
+            await audio.enableHandsFree()
+            try require(audio.state == "LISTENING", "Initial listening")
+            audio.transcript = "conversa ambiente"
+            audio.finish()
+            try await waitFor { audio.state == "LISTENING" }
+            try require(requests.isEmpty && outputs.isEmpty, "Ambient speech reached response")
+
+            audio.transcript = "Ei TARS"
+            audio.finish()
+            try require(audio.state == "SPEAKING" && audio.voicePolicy.awaitingRequest,
+                        "Wake must acknowledge and await question")
+            guard let ack = audio.utterance else { throw CancellationError() }
+            audio.speechSynthesizer(audio.speaker, didFinish: ack)
+            try await waitFor { audio.state == "LISTENING" }
+            audio.transcript = "me responda em português"
+            audio.finish()
+            try await waitFor { audio.state == "SPEAKING" }
+            try require(requests == ["me responda em português"] && outputs.last == "Olá, sou o TARS.",
+                        "Portuguese request/answer mismatch")
+            guard let portuguese = audio.utterance else { throw CancellationError() }
+            audio.speechSynthesizer(audio.speaker, didFinish: portuguese)
+            try await waitFor { audio.state == "LISTENING" }
+            try require(!audio.voicePolicy.awaitingRequest, "Question authorization leaked into next cycle")
+
+            audio.transcript = "TARS, answer me in English"
+            audio.finish()
+            try await waitFor { audio.state == "SPEAKING" }
+            try require(requests.count == 2 && outputs.last == "Hello, I'm TARS.", "English request/answer mismatch")
+            guard let english = audio.utterance else { throw CancellationError() }
+            // An old completion must not cancel the current utterance.
+            audio.speechSynthesizer(audio.speaker, didFinish: portuguese)
+            try await Task.sleep(for: .milliseconds(30))
+            try require(audio.state == "SPEAKING", "Stale speech callback cancelled new answer")
+            audio.speechSynthesizer(audio.speaker, didFinish: english)
+            try await waitFor { audio.state == "LISTENING" }
+
+            var delayed: CheckedContinuation<String, Never>?
+            audio.respond = { text, _ in
+                requests.append(text)
+                return await withCheckedContinuation { delayed = $0 }
+            }
+            audio.transcript = "TARS, pergunta interrompida"
+            audio.finish()
+            try await waitFor { delayed != nil }
+            let outputCount = outputs.count
+            audio.suspendHandsFree()
+            delayed?.resume(returning: "This cancelled answer must never play")
+            delayed = nil
+            try await Task.sleep(for: .milliseconds(750))
+            try require(audio.state == "IDLE" && outputs.count == outputCount,
+                        "Cancelled response played or restarted capture")
+            await audio.enableHandsFree()
+            audio.transcript = "fala sem nova ativação"
+            audio.finish()
+            try await waitFor { audio.state == "LISTENING" }
+            try require(requests.count == 3, "Cancelled request was replayed")
+
+            audio.respond = { _, _ in throw TARSClientError.pairingRejected }
+            audio.transcript = "TARS, nova pergunta"
+            audio.finish()
+            try await waitFor { audio.voiceServiceBlocked }
+            let stoppedCaptures = captures
+            await audio.enableHandsFree()
+            try await Task.sleep(for: .milliseconds(750))
+            try require(audio.state == "IDLE" && captures == stoppedCaptures,
+                        "Permanent failure restarted capture")
+            return "PASS: controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+        } catch {
+            return "FAIL: " + error.localizedDescription
+        }
+    }
+}
+#endif

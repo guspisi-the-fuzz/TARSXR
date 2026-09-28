@@ -199,3 +199,24 @@ e wake local indisponível no simulador continuam sem solução comprovada.
 
 Rollback: reverter apenas o commit VOICE-3; patch voice-3-app.patch no workspace.
 Mudanças preexistentes de pronúncia/project.pbxproj não incluídas.
+
+## VOICE-4 — integração do controlador com I/O simulado
+
+Diagnóstico exclusivo de Debug Simulator, ativado por TARS_VOICE_CHECKS=1 com
+TARS_ONLINE_WAKE=0. Substitui apenas captura e saída de fala; exercita roteamento,
+tarefas assíncronas, cancelamento, callbacks e agendamento do XRAudioController.
+Durante o diagnóstico, a view não inicia conexão ao Core nem escuta normal.
+Resultado gravado em Documents/voice-cycle-checks.txt no container do app.
+
+Executado no iPhone 18 Pro/iOS 27 Simulator: PASS para fala ambiente ignorada,
+ativação por nome e pergunta posterior em português, pergunta direta em inglês,
+retorno à espera por nova ativação, callback de fala antigo ignorado, resposta
+cancelada descartada, nenhum replay e bloqueio após erro permanente de autorização.
+Debug Simulator BUILD SUCCEEDED; diagnóstico encerrado após leitura do resultado.
+Não usa microfone, reconhecimento Apple, TTS real ou API. Não valida transcrição
+online, acústica, qualidade perceptiva ou ativação local real. Estes continuam
+pendentes; não confundir esse PASS com aceite de voz de ponta a ponta.
+
+Rollback: reverter apenas VOICE-4; patch voice-4-app.patch no workspace.
+Arquivos locais de pronúncia e project.pbxproj preservados fora do commit.
+Release Simulator BUILD SUCCEEDED: hooks de captura/saída simuladas excluídos.

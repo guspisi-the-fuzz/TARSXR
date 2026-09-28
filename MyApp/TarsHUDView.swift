@@ -11,6 +11,13 @@ struct TarsHUDView: View {
         return false
         #endif
     }
+    private var simulatedVoiceChecks: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return ProcessInfo.processInfo.environment["TARS_VOICE_CHECKS"] == "1"
+        #else
+        return false
+        #endif
+    }
     @StateObject private var audio = XRAudioController()
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
@@ -47,12 +54,21 @@ struct TarsHUDView: View {
         }
         #endif
         .task {
+            #if DEBUG && targetEnvironment(simulator)
+            if simulatedVoiceChecks {
+                let result = await XRAudioController.runSimulatedCycleChecks()
+                let file = URL.documentsDirectory.appendingPathComponent("voice-cycle-checks.txt")
+                try? result.write(to: file, atomically: true, encoding: .utf8)
+                print(result)
+                return
+            }
+            #endif
             audio.transcribe = { data in try await model.transcribe(data: data) }
             audio.respond = { text, language in try await model.converse(text: text, language: language) }
             await model.run()
         }
         .task(id: scenePhase) {
-            guard !manualDiagnostics else { return }
+            guard !manualDiagnostics, !simulatedVoiceChecks else { return }
             if scenePhase == .active {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
