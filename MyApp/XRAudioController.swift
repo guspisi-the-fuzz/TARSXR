@@ -67,7 +67,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var restartTask: Task<Void, Never>?
     private var onlineTrial = OnlineVoiceTrialBudget(conversation: ProcessInfo.processInfo.environment["TARS_VOICE_SESSION"] == "conversation")
     private var trialDeadline: Task<Void, Never>?
-    #if DEBUG && targetEnvironment(simulator)
+    #if DEBUG
     // Explicit diagnostic injection; absent from release and normal launches.
     private var simulatedCapture: (() -> Void)?
     private var simulatedOutput: ((String) -> Void)?
@@ -158,7 +158,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
         generation = UUID()
         let id = generation
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         if let simulatedCapture {
             state = "LISTENING"
             status = voicePolicy.awaitingRequest ? "LISTENING" : "WAITING_WAKE"
@@ -496,7 +496,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     private func speak(_ text: String) {
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
         #endif
         guard useAI else { speakLocally(text); return }
@@ -603,7 +603,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     private func speakLocally(_ text: String) {
         voiceSource = "Voz sintetizada local"
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         if let simulatedOutput {
             utterance = AVSpeechUtterance(string: text)
             state = "SPEAKING"; status = "SPEAKING"
@@ -726,7 +726,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 }
 
-#if DEBUG && targetEnvironment(simulator)
+#if DEBUG
 extension XRAudioController {
     /// Bounded local-only probe; records capability/error metadata, never speech text.
     static func runLocalRecognitionProbe() async -> String {

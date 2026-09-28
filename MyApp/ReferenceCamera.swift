@@ -77,7 +77,7 @@ enum ReferencePhoto {
     }
 }
 
-#if DEBUG && targetEnvironment(simulator)
+#if DEBUG
 @MainActor
 enum ReferenceCameraChecks {
     static func run() async throws {

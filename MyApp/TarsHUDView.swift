@@ -16,7 +16,7 @@ struct TarsHUDView: View {
         #endif
     }
     private var simulatedVoiceChecks: Bool {
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         return ProcessInfo.processInfo.environment["TARS_VOICE_CHECKS"] == "1"
             || ProcessInfo.processInfo.environment["TARS_LOCAL_VOICE_PROBE"] == "1"
         #else
@@ -77,7 +77,7 @@ struct TarsHUDView: View {
         }
         #endif
         .task {
-            #if DEBUG && targetEnvironment(simulator)
+            #if DEBUG
             if ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] == "1" {
                 let data = VisionTestPanel.fixture().pngData()
                 try? data?.write(to: URL.documentsDirectory.appendingPathComponent("vision-fixture.png"), options: .atomic)
