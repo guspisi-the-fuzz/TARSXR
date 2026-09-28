@@ -37,6 +37,7 @@ final class TarsHUDViewModel: ObservableObject {
     init(baseURL: URL, pairingSecret: String) {
         #if DEBUG
         let baseURL = ProcessInfo.processInfo.environment["TARS_CORE_URL"].flatMap(URL.init(string:)) ?? baseURL
+        let pairingSecret = ProcessInfo.processInfo.environment["TARS_PAIRING_SECRET"] ?? pairingSecret
         #endif
         self.baseURL = baseURL
         self.pairingSecret = pairingSecret
