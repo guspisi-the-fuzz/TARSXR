@@ -338,3 +338,19 @@ existing local voice fallback. Requests remain bounded and share the Core's budg
 Debug tests use silent PCM, so they verify playback lifecycle, not voice quality or
 real network latency. Live comparison with full MP3 remains required before making
 streaming the default. No microphone or paid API call is used by the diagnostic.
+
+## VOICE-17: optional first-sentence response
+
+`TARS_EARLY_RESPONSE=1 TARS_STREAM_VOICE=1 ./scripts/conversation-session.sh`
+selects early conversation audio after transcription. Default remains the existing
+complete-response path. One model request yields a complete first sentence then
+remaining text. Up to two sequential Onyx generation requests feed one buffered
+PCM player; the first can overlap generation of the remaining text. Voice identity
+and instructions are unchanged, but cadence across the sentence boundary needs
+real listening validation. Each generation counts toward the unchanged budget.
+No automatic retry; incomplete output is not committed to conversation history.
+Failure does not read the user's question aloud or repeat partially played audio.
+Numeric diagnostic first_audio_after_transcription_seconds measures from model
+request start to playback; do not add a separate answer duration to that field.
+TARS_PAUSE_VOICE=1 keeps the UI/Core connection open without starting capture.
+Offline checks do not establish live latency, quality or uninterrupted prosody.

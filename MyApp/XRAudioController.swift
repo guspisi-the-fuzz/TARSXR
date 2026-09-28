@@ -16,6 +16,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var inputName = ""
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
+    private let pipelinedConversation = ProcessInfo.processInfo.environment["TARS_EARLY_RESPONSE"] == "1"
+    var streamConversation: ((String, @escaping @MainActor (Data) throws -> Void, @escaping @MainActor (String) -> Void) async throws -> Void)?
     var streamSpeech: ((String, @escaping @MainActor (Data) throws -> Void) async throws -> Void)?
     private var streamedPlayer: BufferedVoicePlayer?
     private let streamingEnabled = ProcessInfo.processInfo.environment["TARS_STREAM_VOICE"] == "1"
@@ -110,6 +112,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     override init() {
         super.init()
+        if ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] == "1" {
+            message = "Escuta pausada. Core conectado para acompanhar o sistema."
+        }
         speaker.delegate = self
         interruption = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
@@ -340,6 +345,17 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 #if DEBUG && targetEnvironment(simulator)
                 let answerStarted = ProcessInfo.processInfo.systemUptime
                 #endif
+                if self.pipelinedConversation, let streamConversation = self.streamConversation {
+                    self.speakStreamed(request, isConversation: true) { [weak self] question, receive in
+                        var display = ""
+                        try await streamConversation(question, receive) { part in
+                            guard let self, self.generation == id else { return }
+                            display += (display.isEmpty ? "" : " ") + part
+                            self.message = display
+                        }
+                    }
+                    return
+                }
                 let answer = try await respond(request, "auto")
                 guard !Task.isCancelled, self.generation == id else { return }
                 #if DEBUG && targetEnvironment(simulator)
@@ -482,10 +498,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
     }
 
-    private func speakStreamed(_ text: String, stream: @escaping (String, @escaping @MainActor (Data) throws -> Void) async throws -> Void) {
+    private func speakStreamed(_ text: String, isConversation: Bool = false, stream: @escaping (String, @escaping @MainActor (Data) throws -> Void) async throws -> Void) {
         speechTask?.cancel()
         let id = generation
-        state = "PREPARING"; status = "PREPARING"; message = text
+        state = "PREPARING"; status = "PREPARING"; message = isConversation ? "TARS está preparando a resposta…" : text
         voiceSource = "Voz gerada por IA"; voiceProgress = "Preparando voz natural…"
         speechTask = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == id else { return }
@@ -498,7 +514,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     self.state = "SPEAKING"; self.status = "SPEAKING"
                     self.voiceProgress = "Reproduzindo voz natural."
                     #if DEBUG && targetEnvironment(simulator)
-                    self.recordLatency("voice_until_play_seconds", since: started)
+                    self.recordLatency(isConversation ? "first_audio_after_transcription_seconds" : "voice_until_play_seconds", since: started)
                     #endif
                 }
                 player.onFinish = { [weak self] in
@@ -523,7 +539,9 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 self.streamedPlayer?.stop(); self.streamedPlayer = nil
                 self.naturalVoiceUnavailable = true
                 self.timeout?.cancel(); self.timeout = nil
-                if alreadyPlayed {
+                if isConversation {
+                    self.failService(error)
+                } else if alreadyPlayed {
                     self.fail("A voz foi interrompida pela conexão. Não vou repetir a resposta automaticamente.")
                 } else {
                     self.speakLocally(text)
@@ -727,6 +745,28 @@ extension XRAudioController {
             cancelled.stop()
             try await Task.sleep(for: .milliseconds(100))
             try require(!cancelled.hasStarted && completions == 1, "Cancelled stream completed or played")
+            let early = XRAudioController()
+            defer { early.suspendHandsFree() }
+            early.simulatedCapture = {}
+            var wrongFallback: [String] = []
+            early.simulatedOutput = { wrongFallback.append($0) }
+            await early.enableHandsFree()
+            early.stopCapture()
+            early.speakStreamed("question must never be spoken", isConversation: true) { _, receive in
+                try receive(Data(repeating: 0, count: 38400))
+                try await Task.sleep(for: .milliseconds(100))
+                try receive(Data(repeating: 0, count: 19200))
+            }
+            try await waitFor { early.voicePolicy.acceptsFollowUp() }
+            try require(wrongFallback.isEmpty, "Pipeline echoed the question")
+            early.suspendHandsFree()
+            await early.enableHandsFree()
+            early.stopCapture()
+            early.speakStreamed("never repeat this question", isConversation: true) { _, _ in
+                throw TARSClientError.pairingRejected
+            }
+            try await waitFor { early.voiceServiceBlocked }
+            try require(wrongFallback.isEmpty, "Failed pipeline spoke user input")
             await audio.enableHandsFree()
             try require(audio.state == "LISTENING", "Initial listening")
             audio.transcript = "conversa ambiente"
@@ -841,7 +881,7 @@ extension XRAudioController {
             natural.cancel()
             natural.speak("Sem repetir chamada paga")
             try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
-            return "PASS: PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

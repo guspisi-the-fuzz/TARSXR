@@ -48,6 +48,11 @@ final class TarsHUDViewModel: ObservableObject {
         try await client.streamSpeech(text: text, receive: receive)
     }
 
+    func streamConversation(text: String, receive: @escaping @MainActor (Data) throws -> Void, receiveText: @escaping @MainActor (String) -> Void) async throws {
+        if client.token == nil { try await client.pair(secret: pairingSecret) }
+        try await client.streamSpeech(text: text, conversation: true, receiveText: receiveText, receive: receive)
+    }
+
     func synthesize(text: String) async throws -> Data {
         if client.token == nil { try await client.pair(secret: pairingSecret) }
         return try await client.synthesize(text: text)

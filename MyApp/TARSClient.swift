@@ -138,17 +138,28 @@ final class TARSClient {
         guard reply.ok, let text = reply.data?.text, !text.isEmpty else { throw TARSClientError.unavailable }
         return text
     }
-    func streamSpeech(text: String, receive: @escaping @MainActor (Data) throws -> Void) async throws {
+    func streamSpeech(text: String, conversation: Bool = false, receiveText: @escaping @MainActor (String) -> Void = { _ in }, receive: @escaping @MainActor (Data) throws -> Void) async throws {
         try Task.checkCancellation()
-        var request = URLRequest(url: baseURL.appendingPathComponent("v1/speech/stream"))
-        request.httpMethod = "POST"; request.timeoutInterval = 35
+        var request = URLRequest(url: baseURL.appendingPathComponent(conversation ? "v1/conversation/audio" : "v1/speech/stream"))
+        request.httpMethod = "POST"; request.timeoutInterval = conversation ? 70 : 35
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "language": "auto", "request_id": UUID().uuidString])
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              http.value(forHTTPHeaderField: "Content-Type") == "application/x-ndjson" else {
+        guard let http = response as? HTTPURLResponse else { throw TARSClientError.unavailable }
+        if http.statusCode == 401 { token = nil; throw TARSClientError.unauthorized }
+        if http.statusCode != 200 {
+            var errorBody = Data()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                errorBody.append(byte)
+                guard errorBody.count <= 16384 else { throw TARSClientError.unavailable }
+            }
+            let object = (try? JSONSerialization.jsonObject(with: errorBody)) as? [String: Any]
+            throw TARSClientError.ai(object?["error"] as? String ?? "AI_SERVICE_ERROR")
+        }
+        guard http.value(forHTTPHeaderField: "Content-Type") == "application/x-ndjson" else {
             throw TARSClientError.unavailable
         }
         var line = Data(); var configured = false; var total = 0
@@ -161,11 +172,18 @@ final class TARSClient {
             }
             guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { throw TARSClientError.unavailable }
             line.removeAll(keepingCapacity: true)
-            if let error = object["error"] as? String { throw TARSClientError.ai(error) }
+            if let error = object["error"] as? String {
+                if error == "UNAUTHORIZED" { token = nil; throw TARSClientError.unauthorized }
+                throw TARSClientError.ai(error)
+            }
             if !configured {
                 guard object["format"] as? String == "pcm_s16le", object["rate"] as? Int == 24000,
                       object["channels"] as? Int == 1 else { throw TARSClientError.unavailable }
                 configured = true; continue
+            }
+            if conversation, let speech = object["speech"] as? String {
+                guard !speech.isEmpty, speech.count <= 2000 else { throw TARSClientError.unavailable }
+                await receiveText(speech); continue
             }
             if object["done"] as? Bool == true {
                 guard total > 0 else { throw TARSClientError.unavailable }

@@ -76,6 +76,7 @@ struct TarsHUDView: View {
                 return
             }
             #endif
+            audio.streamConversation = { text, receive, receiveText in try await model.streamConversation(text: text, receive: receive, receiveText: receiveText) }
             audio.streamSpeech = { text, receive in try await model.streamSpeech(text: text, receive: receive) }
             audio.synthesize = { text in try await model.synthesize(text: text) }
             audio.transcribe = { data in try await model.transcribe(data: data) }
@@ -83,7 +84,7 @@ struct TarsHUDView: View {
             await model.run()
         }
         .task(id: scenePhase) {
-            guard !manualDiagnostics, !simulatedVoiceChecks else { return }
+            guard !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1" else { return }
             if scenePhase == .active {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
