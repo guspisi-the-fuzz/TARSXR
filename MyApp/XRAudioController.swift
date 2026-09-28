@@ -25,7 +25,6 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var voiceSource = "Voz sintetizada local"
     private var speechTask: Task<Void, Never>?
     private var audioPlayer: AVAudioPlayer?
-    private var naturalVoiceUnavailable = false
     private var language = "pt-BR"
     // Explicitly enabled only after consent to online wake transcription.
     private let onlineWake = ProcessInfo.processInfo.environment["TARS_ONLINE_WAKE"] == "1"
@@ -476,7 +475,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         #if DEBUG && targetEnvironment(simulator)
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
         #endif
-        guard useAI, !naturalVoiceUnavailable, let synthesize else { speakLocally(text); return }
+        guard useAI else { speakLocally(text); return }
+        guard let synthesize else {
+            fail("A voz do TARS ainda não está conectada. A resposta continua em texto.")
+            return
+        }
         if streamingEnabled, let streamSpeech {
             speakStreamed(text, stream: streamSpeech)
             return
@@ -516,9 +519,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             } catch {
                 guard !Task.isCancelled, self.generation == id else { return }
                 self.audioPlayer?.stop(); self.audioPlayer = nil
-                self.naturalVoiceUnavailable = true
-                self.voiceProgress = "Voz natural indisponível; usando a voz local nesta sessão."
-                self.speakLocally(text)
+                self.voiceSource = "Voz do TARS indisponível · sem substituição"
+                self.failService(error)
             }
         }
     }
@@ -562,21 +564,21 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 guard !Task.isCancelled, self.generation == id else { return }
                 let alreadyPlayed = self.streamedPlayer?.hasStarted ?? false
                 self.streamedPlayer?.stop(); self.streamedPlayer = nil
-                self.naturalVoiceUnavailable = true
                 self.timeout?.cancel(); self.timeout = nil
                 if isConversation {
                     self.failService(error)
                 } else if alreadyPlayed {
                     self.fail("A voz foi interrompida pela conexão. Não vou repetir a resposta automaticamente.")
                 } else {
-                    self.speakLocally(text)
+                    self.voiceSource = "Voz do TARS indisponível · sem substituição"
+                    self.failService(error)
                 }
             }
         }
     }
 
     private func speakLocally(_ text: String) {
-        voiceSource = naturalVoiceUnavailable ? "Voz local · alternativa ativa" : "Voz sintetizada local"
+        voiceSource = "Voz sintetizada local"
         #if DEBUG && targetEnvironment(simulator)
         if let simulatedOutput {
             utterance = AVSpeechUtterance(string: text)
@@ -665,8 +667,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let identifier = ObjectIdentifier(player)
         Task { @MainActor in
             guard let current = self.audioPlayer, ObjectIdentifier(current) == identifier else { return }
-            self.naturalVoiceUnavailable = true
-            self.fail("Falha na reprodução. A próxima resposta usará a voz local.")
+            self.voiceSource = "Voz do TARS indisponível · sem substituição"
+            self.fail("Falha na reprodução da voz do TARS. A resposta continua em texto.")
         }
     }
 
@@ -984,11 +986,16 @@ extension XRAudioController {
             await natural.enableHandsFree()
             natural.stopCapture()
             natural.speak("Alternativa local")
-            try await waitFor { fallback.count == 1 }
-            natural.cancel()
-            natural.speak("Sem repetir chamada paga")
-            try require(generations == 2 && fallback.count == 2, "Fallback retried paid generation")
-            return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, bounded local fallback; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            try await waitFor { natural.status == "UNAVAILABLE" }
+            try require(generations == 2 && fallback.isEmpty, "Failed natural speech must not substitute local voice")
+            natural.suspendHandsFree()
+            natural.synthesize = { _ in generations += 1; return fixture }
+            await natural.enableHandsFree()
+            natural.stopCapture()
+            natural.speak("Nova resposta com a voz aprovada")
+            try await waitFor { natural.voicePolicy.acceptsFollowUp() }
+            try require(generations == 3 && fallback.isEmpty, "A new response must recover the approved voice")
+            return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

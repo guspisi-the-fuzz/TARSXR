@@ -440,6 +440,7 @@ private struct VisionTestPanel: View {
                         Text(audio.message).textSelection(.enabled)
                     }
                     Text(result).textSelection(.enabled)
+                    Text(audio.voiceSource).font(.caption).foregroundStyle(.secondary)
                     Text(audio.voiceProgress).font(.caption).foregroundStyle(.secondary)
                     Text("A descrição se refere apenas à imagem escolhida. Não mede distâncias e não libera movimentos.")
                         .font(.caption).foregroundStyle(.secondary)
