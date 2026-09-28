@@ -310,3 +310,13 @@ recognition remains unavailable; no claim of an offline wake-word fix.
 Validation: 1,000 alternating PT/EN policy turns, upload/time boundaries, no refill,
 and 60 fake speech calls preserve Onyx; no paid calls. Real long-duration audio and
 interruption/reconnection integration remain to be validated separately.
+
+## VOICE-15: first latency reduction
+Endpoint silence reduced from 2.4 to 1.4 seconds; 20-second capture ceiling and
+15-second no-speech discard unchanged. New boundary checks verify that resumed
+speech resets the silence window. Pauses longer than 1.4 seconds can end a turn;
+real Portuguese/English phrase completion needs user validation.
+Debug simulator overwrites Documents/voice-latency.json with the last successful
+transcription, response and voice-to-playback durations. No text or audio stored.
+API stages remain sequential, not streaming; this change removes one second of
+endpoint waiting but does not establish a measured end-to-end latency improvement.

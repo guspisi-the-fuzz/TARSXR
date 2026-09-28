@@ -78,7 +78,7 @@ struct VoiceCaptureWindow {
         let elapsed = now - startedAt
         let hasSpeech = heardVoice || hasTranscript
         if elapsed >= 20 { return hasSpeech ? .finish : .discard }
-        if hasSpeech && now - lastVoiceAt >= 2.4 { return .finish }
+        if hasSpeech && now - lastVoiceAt >= 1.4 { return .finish }
         if !hasSpeech && elapsed >= 15 { return .discard }
         return .keepListening
     }
