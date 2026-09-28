@@ -9,6 +9,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var state = "IDLE"
     @Published private(set) var status = "NOT ENABLED"
     @Published private(set) var transcript = ""
+    @Published private(set) var lastHeard = ""
+    @Published private(set) var voiceProgress = ""
     @Published private(set) var message = "Diga TARS para conversar quando a escuta estiver disponível."
     @Published private(set) var level: Double = 0
     @Published private(set) var inputName = ""
@@ -48,7 +50,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private func endOnlineTrial() {
         suspendHandsFree()
         status = "TRIAL FINISHED"
-        message = "Teste online encerrado: limite de 3 minutos ou 6 envios."
+        message = "Teste online encerrado: \(onlineTrial.uploads) de 6 envios; duração máxima de 3 minutos."
     }
 
     func enableHandsFree() async {
@@ -212,7 +214,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     case .finish: self.finish(); return
                     case .discard:
                         if self.handsFree { self.voicePolicy.reset() }
-                        self.cancel(message: self.handsFree ? "Diga TARS para conversar." : "Não ouvi uma frase.")
+                        self.voiceProgress = "Resposta falada concluída."
+            self.cancel(message: self.handsFree ? "Diga TARS para conversar." : "Não ouvi uma frase.")
                         return
                     case .keepListening: break
                     }
@@ -239,6 +242,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
             transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
             state = "LISTENING"; status = "LISTENING"
+            if voiceProgress.isEmpty { voiceProgress = "Capturando áudio; faça uma pausa ao terminar." }
             status = handsFree && !voicePolicy.awaitingRequest ? "WAITING_WAKE_ONLINE" : "LISTENING"
             message = handsFree && !voicePolicy.awaitingRequest
                 ? "Escuta online · PT/EN · diga TARS / say TARS"
@@ -256,7 +260,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     case .finish: self.finish(); return
                     case .discard:
                         if self.handsFree { self.voicePolicy.reset() }
-                        self.cancel(message: self.handsFree ? "Aguardando TARS / Waiting for TARS" : "Não detectei fala.")
+                        self.voiceProgress = "Resposta falada concluída."
+            self.cancel(message: self.handsFree ? "Aguardando TARS / Waiting for TARS" : "Não detectei fala.")
                         return
                     case .keepListening: break
                     }
@@ -275,6 +280,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         let id = generation
         state = "TRANSCRIBING"; status = "TRANSCRIBING"
         message = "Entendendo sua fala…"
+        voiceProgress = "Enviando áudio para transcrição…"
         conversationTask = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == id else { return }
             do {
@@ -283,12 +289,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                         self.endOnlineTrial(); return
                     }
                 }
+                self.voiceProgress = "Transcrevendo · envio \(self.onlineTrial.uploads)/6"
                 let text = try await transcribe(data)
                 guard !Task.isCancelled, self.generation == id else { return }
                 guard let request = self.routeRecognizedSpeech(text) else { return }
                 self.transcript = request
                 self.state = "THINKING"; self.status = "THINKING"
                 self.message = "TARS está pensando…"
+                self.voiceProgress = "Pergunta reconhecida; aguardando resposta da IA."
                 let answer = try await respond(request, "auto")
                 guard !Task.isCancelled, self.generation == id else { return }
                 self.speak(answer)
@@ -349,16 +357,22 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     private func routeRecognizedSpeech(_ text: String) -> String? {
+        lastHeard = String(text.prefix(300))
         guard handsFree else { return text }
         switch voicePolicy.consume(text) {
         case .ignore:
+            voiceProgress = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Nenhuma fala reconhecida."
+                : "Transcrição recebida, mas não identifiquei TARS."
             transcript = ""
             cancel(message: "Aguardando TARS / Waiting for TARS")
             return nil
         case .acknowledge:
+            voiceProgress = "TARS reconhecido; aguardando sua pergunta após a confirmação."
             speak("Estou ouvindo. I'm listening.")
             return nil
         case .request(let request):
+            voiceProgress = "Pergunta reconhecida; preparando resposta."
             transcript = request
             return request
         }
@@ -427,6 +441,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     private func fail(_ message: String) {
+        voiceProgress = message
         if handsFree {
             voicePolicy.failed()
             if !onlineWake { language = language == "pt-BR" ? "en-US" : "pt-BR" }
@@ -440,12 +455,14 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         Task { @MainActor in
             guard let current = self.utterance, ObjectIdentifier(current) == identifier else { return }
             self.state = "SPEAKING"; self.status = "SPEAKING"
+            self.voiceProgress = "Reproduzindo resposta em voz."
         }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         let identifier = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard let current = self.utterance, ObjectIdentifier(current) == identifier else { return }
+            self.voiceProgress = "Resposta falada concluída."
             self.cancel(message: self.handsFree ? "Aguardando sua voz…" : "Resposta concluída.")
         }
     }
@@ -517,6 +534,8 @@ extension XRAudioController {
             audio.finish()
             try await waitFor { audio.state == "LISTENING" }
             try require(requests.isEmpty && outputs.isEmpty, "Ambient speech reached response")
+            try require(audio.lastHeard == "conversa ambiente" && audio.voiceProgress.contains("não identifiquei"),
+                        "Ignored wake must retain useful feedback")
 
             audio.transcript = "Ei TARS"
             audio.finish()

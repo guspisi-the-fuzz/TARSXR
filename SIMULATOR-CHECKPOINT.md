@@ -241,3 +241,18 @@ online ativado. Próxima validação acústica local depende de corrigir a inici
 ou testar outro runtime; XR físico permanece após software conforme ordem definida.
 O ciclo do controlador com I/O simulado passou em VOICE-4, mas não resolve esta falha.
 Rollback: reverter apenas VOICE-5; patch voice-5-app.patch no workspace.
+
+## VOICE-6 — tornar o silêncio do app diagnosticável
+
+Após teste online sem resposta relatado pelo usuário, tela foi inspecionada:
+TRIAL FINISHED. Não havia evidência suficiente para distinguir falha na captura,
+transcrição sem a palavra TARS ou reprodução. Não atribuir causa sem dados.
+
+UI normal agora mostra última transcrição (até 300 caracteres, somente em memória)
+e etapa/motivo: transcrevendo, palavra de ativação ausente, aguardando IA, saída de
+voz, falha. Encerramento mostra uploads usados. Nenhum botão adicionado; mantém
+limites de 180 s/6 uploads e não libera movimento. Build Debug PASS.
+Ciclo do controlador reexecutado no simulador: PASS, incluindo transcrição ignorada
+preservada com motivo legível. Teste offline, sem API. Aceitação acústica segue
+pendente de nova fala do usuário com o diagnóstico visível.
+Rollback: reverter VOICE-6; patch voice-6-app.patch no workspace.

@@ -39,8 +39,16 @@ struct TarsHUDView: View {
                 if manualDiagnostics {
                     AudioControls(audio: audio)
                 } else {
-                    Text(audio.message)
-                        .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
+                    VStack(spacing: 4) {
+                        Text(audio.message)
+                        if !audio.lastHeard.isEmpty {
+                            Text("Ouvi: \(audio.lastHeard)").foregroundStyle(.cyan).lineLimit(3)
+                        }
+                        if !audio.voiceProgress.isEmpty {
+                            Text(audio.voiceProgress).lineLimit(3)
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
                 }
                 Rectangle().frame(height: 1).foregroundStyle(.green)
                 EngineeringPanel(model: model, audioStatus: audio.status)
