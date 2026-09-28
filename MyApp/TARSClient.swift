@@ -33,6 +33,13 @@ struct TARSTelemetry: Decodable {
 struct TARSAPIResponse<T: Decodable>: Decodable { let ok: Bool; let data: T? }
 struct SpeechReply: Decodable { let audio: String; let format: String }
 struct TranscriptionReply: Decodable { let text: String }
+struct VisionReply: Decodable {
+    let description: String
+    let source: String
+    let live_camera: Bool
+    let actions_enabled: Bool
+    let metric_geometry_available: Bool
+}
 struct ConversationReply: Decodable { let speech: String }
 
 enum TARSClientError: LocalizedError {
@@ -59,6 +66,9 @@ enum TARSClientError: LocalizedError {
             case "AI_QUOTA_OR_RATE_LIMIT": return "A API está sem saldo ou no limite de uso."
             case "AI_LOCAL_LIMIT": return "Limite de testes desta sessão atingido."
             case "AI_AUTH_FAILED", "AI_ACCESS_DENIED": return "A API não autorizou esta conexão."
+            case "STALE_VISION_FRAME": return "A imagem expirou antes de concluir. Você pode iniciar uma nova análise."
+            case "INVALID_IMAGE": return "Não consegui usar essa imagem. Escolha outra foto."
+            case "VISION_FRAME_CONFLICT", "INVALID_VISION_SCHEMA", "INVALID_VISION_REQUEST", "INVALID_VISION_FRAME", "INVALID_VISION_TIME": return "A imagem não pôde ser enviada. Selecione novamente."
             case "AI_BUSY": return "A IA está respondendo. Tente novamente em instantes."
             case "AI_UNCONFIGURED": return "A IA ainda não está configurada neste Core."
             default: return "A IA está indisponível no momento. Tente novamente."
@@ -131,6 +141,20 @@ final class TARSClient {
         let reply = try JSONDecoder().decode(TARSAPIResponse<TARSRecoveryReply>.self, from: data)
         guard reply.ok, reply.data?.recovered == true else { throw TARSClientError.unavailable }
     }
+    func describeImage(png: Data, source: String, question: String) async throws -> VisionReply {
+        try Task.checkCancellation()
+        guard !png.isEmpty, png.count <= 1_000_000 else { throw TARSClientError.unavailable }
+        let frame: [String: Any] = ["id": UUID().uuidString, "source": source,
+            "submitted_at": Date().timeIntervalSince1970, "png": png.base64EncodedString()]
+        let body = try JSONSerialization.data(withJSONObject: ["schema_version":"1.0", "frame":frame, "question":question])
+        let data = try await request(path: "v1/vision", method: "POST", body: body)
+        try Task.checkCancellation()
+        let reply = try JSONDecoder().decode(TARSAPIResponse<VisionReply>.self, from: data)
+        guard reply.ok, let result = reply.data, !result.live_camera, !result.actions_enabled,
+              !result.metric_geometry_available else { throw TARSClientError.unavailable }
+        return result
+    }
+
     func transcribe(data: Data) async throws -> String {
         let body = try JSONSerialization.data(withJSONObject: ["audio": data.base64EncodedString()])
         let result = try await request(path: "v1/transcription", method: "POST", body: body)

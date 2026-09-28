@@ -1,8 +1,11 @@
 import SwiftUI
+import PhotosUI
+import ImageIO
 
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
     @State private var showsTests = false
+    @State private var showsVision = false
     // Manual controls are opt-in diagnostics, never the normal interaction flow.
     private var manualDiagnostics: Bool {
         #if DEBUG && targetEnvironment(simulator)
@@ -28,6 +31,10 @@ struct TarsHUDView: View {
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
                 #if DEBUG && targetEnvironment(simulator)
+                if ProcessInfo.processInfo.environment["TARS_VISION_TEST"] == "1" {
+                    Button("Teste de visão") { showsVision = true }
+                        .buttonStyle(.bordered).tint(.cyan)
+                }
                 if manualDiagnostics {
                 Button { showsTests = true } label: {
                     Label("Painel de Testes", systemImage: "slider.horizontal.3")
@@ -59,12 +66,18 @@ struct TarsHUDView: View {
             .fontDesign(.monospaced)
         }
         #if DEBUG && targetEnvironment(simulator)
+        .sheet(isPresented: $showsVision) { VisionTestPanel(model: model) }
         .sheet(isPresented: $showsTests) {
             SimulatorTestPanel(model: model)
         }
         #endif
         .task {
             #if DEBUG && targetEnvironment(simulator)
+            if ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] == "1" {
+                let data = VisionTestPanel.fixture().pngData()
+                try? data?.write(to: URL.documentsDirectory.appendingPathComponent("vision-fixture.png"), options: .atomic)
+                return
+            }
             if simulatedVoiceChecks {
                 let localProbe = ProcessInfo.processInfo.environment["TARS_LOCAL_VOICE_PROBE"] == "1"
                 let result = localProbe
@@ -84,7 +97,7 @@ struct TarsHUDView: View {
             await model.run()
         }
         .task(id: scenePhase) {
-            guard !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1" else { return }
+            guard !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
             if scenePhase == .active {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
@@ -362,6 +375,97 @@ private struct SimulatorTestPanel: View {
 
     private func status(_ title: String, _ value: String) -> some View {
         HStack { Text(title).foregroundStyle(.secondary); Spacer(); Text(value).bold() }
+    }
+}
+#endif
+
+
+#if DEBUG && targetEnvironment(simulator)
+/// Explicit, one-image reference test. No camera or background upload.
+private struct VisionTestPanel: View {
+    @ObservedObject var model: TarsHUDViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: PhotosPickerItem?
+    @State private var image: UIImage?
+    @State private var png: Data?
+    @State private var source = "simulation"
+    @State private var question = "Descreva o que aparece nesta imagem em português."
+    @State private var result = "Escolha uma imagem ou use a cena de teste."
+    @State private var busy = false
+    @State private var operation: Task<Void, Never>?
+    @State private var generation = UUID()
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Imagem de referência · câmera desligada").font(.headline)
+                    if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 230) }
+                    Button("Usar cena de teste") { selected = nil; setImage(Self.fixture(), source: "simulation") }
+                        .disabled(busy)
+                    PhotosPicker("Escolher uma foto", selection: $selected, matching: .images).disabled(busy)
+                    TextField("Pergunta sobre a imagem", text: $question, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).disabled(busy)
+                    Text("Ao tocar em Descrever, esta imagem e sua pergunta serão enviadas à OpenAI, com consumo de API. Não há captura contínua.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button(busy ? "Analisando…" : "Descrever imagem") { analyze() }
+                        .buttonStyle(.borderedProminent).disabled(png == nil || busy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || question.count > 500)
+                    Text(result).textSelection(.enabled)
+                    Text("A descrição se refere apenas à imagem escolhida. Não mede distâncias e não libera movimentos.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding()
+            }
+            .navigationTitle("Teste de visão")
+            .toolbar { Button("Fechar") { dismiss() } }
+            .task(id: selected) {
+                guard let selected else { return }
+                do {
+                    guard let data = try await selected.loadTransferable(type: Data.self), data.count <= 20_000_000,
+                          let source = CGImageSourceCreateWithData(data as CFData, nil),
+                          let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 480] as CFDictionary) else {
+                        result = "Não consegui abrir essa imagem."; return
+                    }
+                    try Task.checkCancellation()
+                    setImage(UIImage(cgImage: thumb), source: "reference")
+                } catch { if !Task.isCancelled { result = "Não consegui carregar a foto." } }
+            }
+            .onDisappear { generation = UUID(); operation?.cancel(); operation = nil }
+        }
+    }
+    private func setImage(_ input: UIImage, source: String) {
+        generation = UUID(); operation?.cancel(); busy = false; result = "Imagem pronta. Ainda não enviada."
+        let scale = min(1, 480 / max(input.size.width, input.size.height))
+        let size = CGSize(width: max(1, input.size.width*scale), height: max(1, input.size.height*scale))
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.preferredRange = .standard
+        let clean = UIGraphicsImageRenderer(size: size, format: format).image { _ in input.draw(in: CGRect(origin: .zero, size: size)) }
+        self.image = clean; self.png = clean.pngData(); self.source = source
+    }
+    private func analyze() {
+        guard let png, !busy else { return }
+        busy = true; result = "Analisando a imagem…"
+        let id = UUID(); generation = id
+        operation = Task { @MainActor in
+            defer { if generation == id { busy = false } }
+            do {
+                let reply = try await model.describeImage(png: png, source: source, question: question)
+                guard !Task.isCancelled, generation == id else { return }
+                result = reply.description
+            } catch {
+                guard !Task.isCancelled, generation == id else { return }
+                result = error.localizedDescription
+            }
+        }
+    }
+    fileprivate static func fixture() -> UIImage {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.preferredRange = .standard
+        return UIGraphicsImageRenderer(size: CGSize(width: 480, height: 320), format: format).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0,y: 0,width: 480,height: 320))
+            UIColor.red.setFill(); context.fill(CGRect(x: 45,y: 90,width: 130,height: 130))
+            UIColor.blue.setFill(); context.cgContext.fillEllipse(in: CGRect(x: 275,y: 90,width: 130,height: 130))
+        }
     }
 }
 #endif

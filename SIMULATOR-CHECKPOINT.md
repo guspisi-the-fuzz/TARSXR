@@ -354,3 +354,14 @@ Numeric diagnostic first_audio_after_transcription_seconds measures from model
 request start to playback; do not add a separate answer duration to that field.
 TARS_PAUSE_VOICE=1 keeps the UI/Core connection open without starting capture.
 Offline checks do not establish live latency, quality or uninterrupted prosody.
+
+## VISION-1 — reference image panel
+TARS_VISION_TEST=1 exposes only the debug simulator test panel. Launch with
+TARS_PAUSE_VOICE=1 and TARS_VISION_CHECKS=0. Synthetic scene or photo picker;
+no camera and no automatic upload. Preview and explicit Descrever button sends
+one image/question to OpenAI with API use disclosed. Source remains reference or
+simulation, never live camera. Core caps 10 attempts per process and enforces
+15s submission/result age. Results cannot command motion or replace sensors.
+TARS_VISION_CHECKS=1 exports only the synthetic fixture locally for PNG compatibility
+checks and suppresses voice capture. This mode makes no network/API request.
+Physical camera, voice-to-vision conversation and XR validation are still pending.

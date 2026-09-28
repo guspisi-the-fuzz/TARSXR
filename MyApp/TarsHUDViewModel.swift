@@ -53,6 +53,11 @@ final class TarsHUDViewModel: ObservableObject {
         try await client.streamSpeech(text: text, conversation: true, receiveText: receiveText, receive: receive)
     }
 
+    func describeImage(png: Data, source: String, question: String) async throws -> VisionReply {
+        if client.token == nil { try await client.pair(secret: pairingSecret) }
+        return try await client.describeImage(png: png, source: source, question: question)
+    }
+
     func synthesize(text: String) async throws -> Data {
         if client.token == nil { try await client.pair(secret: pairingSecret) }
         return try await client.synthesize(text: text)
