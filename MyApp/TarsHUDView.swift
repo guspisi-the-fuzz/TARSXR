@@ -31,7 +31,7 @@ struct TarsHUDView: View {
                 if manualDiagnostics {
                     AudioControls(audio: audio)
                 } else {
-                    Text("Voz automática em desenvolvimento")
+                    Text(audio.message)
                         .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
                 }
                 Rectangle().frame(height: 1).foregroundStyle(.green)
@@ -51,10 +51,18 @@ struct TarsHUDView: View {
             audio.respond = { text, language in try await model.converse(text: text, language: language) }
             await model.run()
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
+        .task(id: scenePhase) {
+            guard !manualDiagnostics else { return }
+            if scenePhase == .active {
+                await audio.enableHandsFree()
+            } else if scenePhase == .background {
+                audio.suspendHandsFree()
+            }
         }
-        .onDisappear { audio.cancel() }
+        .onChange(of: scenePhase) { _, phase in
+            if manualDiagnostics && phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
+        }
+        .onDisappear { audio.suspendHandsFree() }
     }
 }
 

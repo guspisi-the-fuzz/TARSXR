@@ -107,3 +107,27 @@ manual foi retirado do fluxo normal por solicitação do usuário.
 Alterações locais de pronúncia e projeto preservadas, fora deste commit.
 Rollback: git revert do commit UI-3; patch reversível no workspace em
 software/rollback/ui-3.patch. Não remover estado persistente de segurança.
+
+## VOICE-1 — ativação por voz no primeiro plano
+
+Usuário autorizou reutilizar a chave existente. Fluxo normal inicia escuta local
+em português: dizer TARS sozinho produz confirmação e abre uma pergunta;
+TARS seguido da pergunta envia apenas a pergunta ao serviço de conversa existente.
+Falas sem ativação são descartadas. Captura para antes de TTS; retorno à espera
+após resposta, silêncio, ou falha com intervalo progressivo limitado a 30 s.
+Suspensão cancela tarefas e respostas antigas; interrupções retomam apenas quando
+a escuta automática já estava habilitada. Permissão negada ou reconhecimento local
+não suportado não inicia tentativas infinitas; diagnóstico permanece visível.
+Fonte Apple para a exigência de reconhecimento local:
+https://developer.apple.com/documentation/speech/sfspeechrecognitionrequest/requiresondevicerecognition
+
+Validação: VoiceActivationChecks, ClientReconnectionChecks, 22 checks de pronúncia
+PASS; Debug Simulator BUILD SUCCEEDED. Core sem mudanças: 371 testes passaram
+na etapa anterior. Sem validação acústica end-to-end, XR físico ou alegação de
+melhoria no timbre. Reconhecimento local precisa estar disponível no dispositivo;
+não há fallback silencioso para transmitir áudio ambiente. Não captura em background
+nem permite interrupção da resposta pela voz. Detector é reconhecimento de palavra,
+não um modelo dedicado de wake word. Qualidade/latência continuam por validar.
+
+Rollback: reverter somente VOICE-1, mantendo alterações locais de pronúncia/projeto;
+patch reversível no workspace software/rollback/voice-1.patch.
