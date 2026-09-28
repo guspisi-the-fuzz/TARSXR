@@ -1,25 +1,34 @@
 import Foundation
 
-/// Pure routing policy: ambient speech never reaches the conversation endpoint.
+/// Routes speech only after wake or inside the bounded post-reply conversation window.
 struct VoiceActivationPolicy {
     enum Result: Equatable { case ignore, acknowledge, request(String) }
     private(set) var awaitingRequest = false
     private(set) var failures = 0
+    private var followUpUntil: TimeInterval?
+    func acceptsFollowUp(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard let deadline = followUpUntil, now.isFinite else { return false }
+        return now >= deadline - 30 && now < deadline
+    }
+    mutating func replyFinished(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        followUpUntil = now.isFinite && now >= 0 ? now + 30 : nil
+    }
     var retrySeconds: Double { failures == 0 ? 0.6 : min(30, pow(2, Double(failures - 1))) }
 
-    mutating func consume(_ text: String) -> Result {
+    mutating func consume(_ text: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Result {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { awaitingRequest = false; return .ignore }
+        guard !text.isEmpty else { awaitingRequest = false; followUpUntil = nil; return .ignore }
         let pattern = #"(?i)\btars\b[\s,.:;!?—-]*"#
         let range = text.range(of: pattern, options: .regularExpression)
-        guard awaitingRequest || range != nil else { return .ignore }
+        guard awaitingRequest || acceptsFollowUp(now: now) || range != nil else { return .ignore }
+        followUpUntil = nil
         let request = range.map { String(text[$0.upperBound...]) } ?? text
         awaitingRequest = request.isEmpty
         failures = 0
         return request.isEmpty ? .acknowledge : .request(request)
     }
-    mutating func failed() { failures = min(6, failures + 1); awaitingRequest = false }
-    mutating func reset() { failures = 0; awaitingRequest = false }
+    mutating func failed() { failures = min(6, failures + 1); awaitingRequest = false; followUpUntil = nil }
+    mutating func reset() { failures = 0; awaitingRequest = false; followUpUntil = nil }
 }
 
 /// A bounded online trial; foreground transitions never refill the allowance.

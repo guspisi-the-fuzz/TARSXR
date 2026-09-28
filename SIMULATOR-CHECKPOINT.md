@@ -256,3 +256,20 @@ Ciclo do controlador reexecutado no simulador: PASS, incluindo transcrição ign
 preservada com motivo legível. Teste offline, sem API. Aceitação acústica segue
 pendente de nova fala do usuário com o diagnóstico visível.
 Rollback: reverter VOICE-6; patch voice-6-app.patch no workspace.
+
+## VOICE-8 — continuidade após resposta
+
+Causa observada na UI: transcrição correta ignorada por ausência de TARS; teste
+encerrou em 6/6 uploads. Fluxo anterior exigia nova ativação a cada pergunta.
+
+Após conclusão real do TTS, abre janela de 30 s para uma próxima frase sem TARS.
+Consumir a frase fecha a janela; próxima resposta concluída abre outra. Wake-only
+continua aguardando pergunta. Silêncio sem fala, falha ou suspensão resetam a
+política. Não amplia o orçamento de 180 s/6 uploads nem permite atuação física.
+Na transcrição online, elegibilidade usa término da captura, não latência da API.
+
+Checks Swift de janela/expiração/relógio/falha/suspensão PASS. Debug build PASS.
+Aceitação com fala real permanece para o teste do usuário após implantação.
+Controlador reexecutado no iOS Simulator, resultado novo às 00:56:36: PASS,
+incluindo pergunta subsequente sem wake, callback antigo e resposta cancelada.
+Rollback: reverter VOICE-8; patch voice-8-app.patch no workspace.
