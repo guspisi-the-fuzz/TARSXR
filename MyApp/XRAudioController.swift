@@ -72,6 +72,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var simulatedCapture: (() -> Void)?
     private var simulatedOutput: ((String) -> Void)?
     private var testNaturalVoice = false
+    #endif
+    #if DEBUG
     private var voiceLatency: [String: Double] = [:]
     private func recordLatency(_ stage: String, since start: TimeInterval) {
         voiceLatency[stage] = ProcessInfo.processInfo.systemUptime - start
@@ -350,13 +352,13 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     }
                 }
                 self.voiceProgress = "Transcrevendo · envio \(self.onlineTrial.uploads)/\(self.onlineTrial.maxUploads)"
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 self.voiceLatency = [:]
                 let transcriptionStarted = ProcessInfo.processInfo.systemUptime
                 #endif
                 let text = try await transcribe(data)
                 guard !Task.isCancelled, self.generation == id else { return }
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 self.recordLatency("transcription_seconds", since: transcriptionStarted)
                 #endif
                 guard let request = self.routeRecognizedSpeech(text, capturedAt: capturedAt) else { return }
@@ -364,7 +366,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 self.state = "THINKING"; self.status = "THINKING"
                 self.message = "TARS está pensando…"
                 self.voiceProgress = "Pergunta reconhecida; aguardando resposta da IA."
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 let answerStarted = ProcessInfo.processInfo.systemUptime
                 #endif
                 if self.visualRespond == nil, self.pipelinedConversation, let streamConversation = self.streamConversation {
@@ -382,7 +384,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 if let visual = self.visualRespond { answer = try await visual(request) }
                 else { answer = try await respond(request, "auto") }
                 guard !Task.isCancelled, self.generation == id else { return }
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 self.recordLatency("answer_seconds", since: answerStarted)
                 #endif
                 self.speak(answer)
@@ -502,7 +504,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             fail("A voz do TARS ainda não está conectada. A resposta continua em texto.")
             return
         }
-        if streamingEnabled, let streamSpeech {
+        if streamingEnabled || visualRespond != nil, let streamSpeech {
             speakStreamed(text, stream: streamSpeech)
             return
         }
@@ -515,7 +517,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         speechTask = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == id else { return }
             do {
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 let synthesisStarted = ProcessInfo.processInfo.systemUptime
                 #endif
                 let data = try await synthesize(text)
@@ -528,7 +530,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 self.audioPlayer = player
                 player.delegate = self
                 guard player.play() else { throw TARSClientError.unavailable }
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG
                 self.recordLatency("voice_until_play_seconds", since: synthesisStarted)
                 #endif
                 self.state = "SPEAKING"; self.status = "SPEAKING"
@@ -562,7 +564,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     guard let self, self.generation == id else { return }
                     self.state = "SPEAKING"; self.status = "SPEAKING"
                     self.voiceProgress = "Reproduzindo voz natural."
-                    #if DEBUG && targetEnvironment(simulator)
+                    #if DEBUG
                     self.recordLatency(isConversation ? "first_audio_after_transcription_seconds" : "voice_until_play_seconds", since: started)
                     #endif
                 }
