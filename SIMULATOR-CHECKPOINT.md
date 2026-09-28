@@ -294,3 +294,19 @@ processo. Reinício reseta a cota de desenvolvimento; não é teto de gastos men
 Rollback voice-9-app.patch e voice-9-core.patch no workspace. Não incluídos os
 arquivos preexistentes de pronúncia e project.pbxproj.
 Release Simulator BUILD SUCCEEDED.
+
+## VOICE-14: bounded extended conversation
+
+Opt-in `scripts/conversation-session.sh` launches an installed build with online
+capture for 15 minutes or 30 uploads. It sends speech to OpenAI, including speech
+before the wake word, and incurs API use. It is not launched by the build or by
+normal icon startup. Background/foreground transitions do not renew the allowance.
+The default short trial remains 3 minutes / 6 uploads. Restarting the process creates
+a new session. This is a development safeguard, not a persistent financial budget.
+Core speech allows 60 requests per process (30 wake acknowledgements plus 30 answers).
+Other provider errors can still trigger the existing local fallback. Restart the
+Core with the corresponding version before the extended session. Local simulator
+recognition remains unavailable; no claim of an offline wake-word fix.
+Validation: 1,000 alternating PT/EN policy turns, upload/time boundaries, no refill,
+and 60 fake speech calls preserve Onyx; no paid calls. Real long-duration audio and
+interruption/reconnection integration remain to be validated separately.

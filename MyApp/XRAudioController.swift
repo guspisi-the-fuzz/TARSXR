@@ -44,7 +44,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var resumeAfterInterruption = false
     private var voicePolicy = VoiceActivationPolicy()
     private var restartTask: Task<Void, Never>?
-    private var onlineTrial = OnlineVoiceTrialBudget()
+    private var onlineTrial = OnlineVoiceTrialBudget(conversation: ProcessInfo.processInfo.environment["TARS_VOICE_SESSION"] == "conversation")
     private var trialDeadline: Task<Void, Never>?
     #if DEBUG && targetEnvironment(simulator)
     // Explicit diagnostic injection; absent from release and normal launches.
@@ -56,7 +56,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private func endOnlineTrial() {
         suspendHandsFree()
         status = "TRIAL FINISHED"
-        message = "Teste online encerrado: \(onlineTrial.uploads) de 6 envios; duração máxima de 3 minutos."
+        message = "Sessão online encerrada: \(onlineTrial.uploads) de \(onlineTrial.maxUploads) envios; limite de \(Int(onlineTrial.duration / 60)) minutos."
     }
 
     func enableHandsFree() async {
@@ -68,7 +68,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             }
             if trialDeadline == nil {
                 trialDeadline = Task { [weak self] in
-                    do { try await Task.sleep(for: .seconds(180)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(self?.onlineTrial.duration ?? 180)) } catch { return }
                     self?.endOnlineTrial()
                 }
             }
@@ -311,7 +311,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                         self.endOnlineTrial(); return
                     }
                 }
-                self.voiceProgress = "Transcrevendo · envio \(self.onlineTrial.uploads)/6"
+                self.voiceProgress = "Transcrevendo · envio \(self.onlineTrial.uploads)/\(self.onlineTrial.maxUploads)"
                 let text = try await transcribe(data)
                 guard !Task.isCancelled, self.generation == id else { return }
                 guard let request = self.routeRecognizedSpeech(text, capturedAt: capturedAt) else { return }

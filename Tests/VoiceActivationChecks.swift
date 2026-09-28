@@ -54,6 +54,28 @@ import Foundation
         expiry.begin(now: 100)
         assert(expiry.available(now: 279))
         assert(!expiry.reserveUpload(now: 280))
+        var extended = OnlineVoiceTrialBudget(conversation: true)
+        extended.begin(now: 100)
+        for _ in 0..<30 { assert(extended.reserveUpload(now: 500)) }
+        assert(!extended.reserveUpload(now: 501))
+        extended.begin(now: 600)
+        assert(!extended.available(now: 600))
+        var timed = OnlineVoiceTrialBudget(conversation: true)
+        timed.begin(now: 100)
+        assert(timed.available(now: 999.9))
+        assert(!timed.available(now: 1000))
+        assert(!timed.available(now: .nan))
+        assert(!timed.available(now: .infinity))
+        var sustained = VoiceActivationPolicy()
+        assert(sustained.consume("TARS, olá", now: 100) == .request("olá"))
+        for turn in 0..<1000 {
+            let now = 100 + Double(turn) * 10
+            sustained.replyFinished(now: now)
+            let text = turn % 2 == 0 ? "continua em português" : "continue in English"
+            assert(sustained.consume(text, now: now + 2) == .request(text))
+        }
+        sustained.failed()
+        assert(sustained.consume("old request", now: 10100) == .ignore)
         let silence = VoiceCaptureWindow(now: 100)
         assert(silence.decision(now: 114.99) == .keepListening)
         assert(silence.decision(now: 115) == .discard)

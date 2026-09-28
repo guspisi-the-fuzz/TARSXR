@@ -31,14 +31,20 @@ struct VoiceActivationPolicy {
     mutating func reset() { failures = 0; awaitingRequest = false; followUpUntil = nil }
 }
 
-/// A bounded online trial; foreground transitions never refill the allowance.
+/// Bounded online sessions; foreground transitions never refill the allowance.
 struct OnlineVoiceTrialBudget {
+    let duration: TimeInterval
+    let maxUploads: Int
+    init(conversation: Bool = false) {
+        duration = conversation ? 900 : 180
+        maxUploads = conversation ? 30 : 6
+    }
     private(set) var startedAt: TimeInterval?
     private(set) var uploads = 0
     mutating func begin(now: TimeInterval) { if startedAt == nil { startedAt = now } }
     func available(now: TimeInterval) -> Bool {
         guard let start = startedAt else { return false }
-        return now >= start && now - start < 180 && uploads < 6
+        return now >= start && now.isFinite && start.isFinite && now - start < duration && uploads < maxUploads
     }
     mutating func reserveUpload(now: TimeInterval) -> Bool {
         guard available(now: now) else { return false }
