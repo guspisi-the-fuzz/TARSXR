@@ -7,13 +7,29 @@ import UIKit
 @MainActor
 final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     @Published private(set) var state = "IDLE"
-    @Published private(set) var status = "NOT ENABLED"
+    @Published private(set) var status = "NOT ENABLED" { didSet { writeVoiceDiagnostic() } }
     @Published private(set) var transcript = ""
     @Published private(set) var lastHeard = ""
     @Published private(set) var voiceProgress = ""
     @Published private(set) var message = "Diga TARS para conversar quando a escuta estiver disponível."
     @Published private(set) var level: Double = 0
     @Published private(set) var inputName = ""
+    private func writeVoiceDiagnostic(errorCode: String? = nil, failedStage: String? = nil) {
+        #if DEBUG
+        // Only state metadata: never speech, images, audio or credentials.
+        var diagnostic: [String: Any] = ["status": status, "state": state,
+            "visual_session": visualRespond != nil, "hands_free": handsFree,
+            "service_blocked": voiceServiceBlocked, "uploads": onlineTrial.uploads,
+            "timestamp": Date().timeIntervalSince1970]
+        if let errorCode { diagnostic["error"] = errorCode }
+        if let failedStage { diagnostic["failed_stage"] = failedStage }
+        guard let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]) else { return }
+        try? data.write(to: URL.documentsDirectory.appendingPathComponent("voice-diagnostic.json"), options: .atomic)
+        if errorCode != nil {
+            try? data.write(to: URL.documentsDirectory.appendingPathComponent("voice-last-error.json"), options: .atomic)
+        }
+        #endif
+    }
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
     private let pipelinedConversation = ProcessInfo.processInfo.environment["TARS_EARLY_RESPONSE"] == "1"
@@ -276,7 +292,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
             state = "LISTENING"; status = "LISTENING"
             if voiceProgress.isEmpty { voiceProgress = "Capturando áudio; faça uma pausa ao terminar." }
-            let followUp = voicePolicy.acceptsFollowUp()
+            let followUp = visualRespond != nil || voicePolicy.acceptsFollowUp()
             status = handsFree && !voicePolicy.awaitingRequest && !followUp ? "WAITING_WAKE_ONLINE" : "LISTENING"
             message = handsFree && !voicePolicy.awaitingRequest && !followUp
                 ? "Escuta online · PT/EN · diga TARS / say TARS"
@@ -313,6 +329,12 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
               let transcribe, let respond else {
             fail("A conexão de voz com o Core ainda não está pronta."); return
         }
+        processCapturedAudio(data, transcribe: transcribe, respond: respond)
+    }
+
+    private func processCapturedAudio(_ data: Data,
+        transcribe: @escaping (Data) async throws -> String,
+        respond: @escaping (String, String) async throws -> String) {
         stopCapture()
         let id = generation
         let capturedAt = ProcessInfo.processInfo.systemUptime
@@ -627,6 +649,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     private func failService(_ error: Error) {
+        let failedStage = state
         if let clientError = error as? TARSClientError, clientError.blocksAutomaticVoice {
             voiceServiceBlocked = true
             handsFree = false
@@ -634,6 +657,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             trialDeadline?.cancel()
         }
         fail(error.localizedDescription)
+        let code: String
+        if case TARSClientError.ai(let value) = error { code = value }
+        else if let network = error as? URLError { code = "URL_ERROR_\(network.code.rawValue)" }
+        else { code = String(describing: type(of: error)) }
+        writeVoiceDiagnostic(errorCode: code, failedStage: failedStage)
     }
 
     private func fail(_ message: String) {
@@ -821,14 +849,19 @@ extension XRAudioController {
             visualAudio.respond = { _, _ in throw NSError(domain: "Visual question reached text-only AI", code: 1) }
             visualAudio.visualRespond = { question in routedVisual.append(question); return "Red square." }
             await visualAudio.enableHandsFree()
-            visualAudio.transcript = "O que aparece nesta foto?"
-            visualAudio.finish()
+            let syntheticCapture = Data([1, 2, 3])
+            let textOnlyForbidden: (String, String) async throws -> String = { _, _ in
+                throw NSError(domain: "Visual question reached text-only AI", code: 1)
+            }
+            visualAudio.processCapturedAudio(syntheticCapture, transcribe: { data in
+                try require(data == syntheticCapture, "Captured bytes changed")
+                return "O que aparece nesta foto?"
+            }, respond: textOnlyForbidden)
             try await waitFor { spokenVisual.count == 1 }
             guard let firstVisual = visualAudio.utterance else { throw CancellationError() }
             visualAudio.speechSynthesizer(visualAudio.speaker, didFinish: firstVisual)
             try await waitFor { visualAudio.state == "LISTENING" }
-            visualAudio.transcript = "What color is it?"
-            visualAudio.finish()
+            visualAudio.processCapturedAudio(syntheticCapture, transcribe: { _ in "What color is it?" }, respond: textOnlyForbidden)
             try await waitFor { spokenVisual.count == 2 }
             try require(routedVisual == ["O que aparece nesta foto?", "What color is it?"], "Explicit visual conversation must accept either language without wake")
             visualAudio.suspendHandsFree()
