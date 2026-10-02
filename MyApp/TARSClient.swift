@@ -235,9 +235,11 @@ final class TARSClient {
         return audio
     }
     func converse(text: String, language: String) async throws -> String {
-        let body = try JSONSerialization.data(withJSONObject: ["text": text, "language": language,
-                                                               "request_id": UUID().uuidString])
-        let data = try await request(path: "v1/conversation", method: "POST", body: body)
+        let body = try JSONSerialization.data(withJSONObject: [
+            "text": text,
+            "mode": "mind"
+        ])
+        let data = try await request(path: "v1/interaction", method: "POST", body: body)
         let reply = try JSONDecoder().decode(TARSAPIResponse<ConversationReply>.self, from: data)
         guard reply.ok, let speech = reply.data?.speech, !speech.isEmpty else { throw TARSClientError.unavailable }
         return speech

@@ -361,7 +361,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 #if DEBUG
                 self.recordLatency("transcription_seconds", since: transcriptionStarted)
                 #endif
-                guard let request = self.routeRecognizedSpeech(text, capturedAt: capturedAt) else { return }
+                guard let request = self.routeRecognizedSpeech(
+                    text,
+                    capturedAt: capturedAt,
+                    respond: respond
+                ) else { return }
                 self.transcript = request
                 self.state = "THINKING"; self.status = "THINKING"
                 self.message = "TARS está pensando…"
@@ -419,7 +423,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         if recorder != nil { finishMultilingualCapture(); return }
         let recognized = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         stopCapture()
-        guard let text = routeRecognizedSpeech(recognized) else { return }
+        guard let text = routeRecognizedSpeech(
+            recognized,
+            respond: self.respond
+        ) else { return }
         guard !text.isEmpty else { cancel(message: "Nenhuma fala reconhecida."); return }
         if useAI {
             guard let respond else { fail("A conexão com a IA ainda não está pronta."); return }
@@ -446,7 +453,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         speak("\(prefix): \(String(spoken.prefix(120)))")
     }
 
-    private func routeRecognizedSpeech(_ text: String, capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime) -> String? {
+    private func routeRecognizedSpeech(
+        _ text: String,
+        capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        respond: ((String, String) async throws -> String)? = nil
+    ) -> String? {
         lastHeard = String(text.prefix(300))
         guard handsFree else { return text }
         // The explicit visual session already grants conversational attention.
@@ -470,8 +481,31 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             cancel(message: "Aguardando TARS / Waiting for TARS")
             return nil
         case .acknowledge:
-            voiceProgress = "TARS reconhecido; aguardando sua pergunta após a confirmação."
-            speak("Estou ouvindo. I'm listening.")
+            voiceProgress = "TARS reconhecido; verificando estado interno."
+            let id = generation
+
+            Task { [weak self] in
+                guard let self, !Task.isCancelled, self.generation == id else { return }
+
+                do {
+                    guard let respond else {
+                        self.speak("Online. Ready to assist.")
+                        return
+                    }
+
+                    let summary = try await respond(
+                        "What is in your mind? Give a concise readiness summary in one sentence, then ask how you can help.",
+                        "auto"
+                    )
+
+                    guard !Task.isCancelled, self.generation == id else { return }
+                    self.speak(summary)
+                } catch {
+                    guard !Task.isCancelled, self.generation == id else { return }
+                    self.speak("Online. Ready to assist.")
+                }
+            }
+
             return nil
         case .request(let request):
             voiceProgress = "Pergunta reconhecida; preparando resposta."

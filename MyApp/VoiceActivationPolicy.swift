@@ -18,7 +18,7 @@ struct VoiceActivationPolicy {
     mutating func consume(_ text: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Result {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { awaitingRequest = false; followUpUntil = nil; return .ignore }
-        let pattern = #"(?i)\btars\b[\s,.:;!?—-]*"#
+        let pattern = #"(?i)\b(?:tars|wake\s+up)\b[\s,.:;!?—-]*"#
         let range = text.range(of: pattern, options: .regularExpression)
         guard awaitingRequest || acceptsFollowUp(now: now) || range != nil else { return .ignore }
         followUpUntil = nil
