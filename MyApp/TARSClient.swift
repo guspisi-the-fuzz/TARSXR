@@ -234,11 +234,20 @@ final class TARSClient {
               !audio.isEmpty, audio.count <= 2_000_000 else { throw TARSClientError.unavailable }
         return audio
     }
-    func converse(text: String, language: String) async throws -> String {
-        let body = try JSONSerialization.data(withJSONObject: [
+    func converse(
+        text: String,
+        language: String,
+        context: [String: Any]? = nil
+    ) async throws -> String {
+        var payload: [String: Any] = [
             "text": text,
             "mode": "mind"
-        ])
+        ]
+        if let context {
+            payload["context"] = context
+        }
+
+        let body = try JSONSerialization.data(withJSONObject: payload)
         let data = try await request(path: "v1/interaction", method: "POST", body: body)
         let reply = try JSONDecoder().decode(TARSAPIResponse<ConversationReply>.self, from: data)
         guard reply.ok, let speech = reply.data?.speech, !speech.isEmpty else { throw TARSClientError.unavailable }

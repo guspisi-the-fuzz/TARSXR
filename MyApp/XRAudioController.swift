@@ -20,6 +20,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         var diagnostic: [String: Any] = ["status": status, "state": state,
             "visual_session": visualRespond != nil, "hands_free": handsFree,
             "service_blocked": voiceServiceBlocked, "uploads": onlineTrial.uploads,
+            "awaiting_request": voicePolicy.awaitingRequest,
+            "follow_up_active": voicePolicy.acceptsFollowUp(),
             "timestamp": Date().timeIntervalSince1970]
         if let errorCode { diagnostic["error"] = errorCode }
         if let failedStage { diagnostic["failed_stage"] = failedStage }
@@ -53,6 +55,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var timeout: Task<Void, Never>?
     private var conversationTask: Task<Void, Never>?
     var respond: ((String, String) async throws -> String)?
+    var wakeRespond: ((String, String) async throws -> String)?
     var visualRespond: ((String) async throws -> String)?
     @Published var useAI = false
     private var tapInstalled = false
@@ -261,12 +264,20 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     ) {
                     case .finish: self.finish(); return
                     case .discard:
-                        if self.handsFree { self.voicePolicy.reset() }
-                        if self.handsFree && !self.voicePolicy.awaitingRequest {
-                self.voicePolicy.replyFinished()
-            }
-            self.voiceProgress = "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."
-            self.cancel(message: self.handsFree ? "Diga TARS para conversar." : "Não ouvi uma frase.")
+                        // A silent/empty capture must not revoke an already-authorized
+                        // wake or follow-up conversation. Preserve the current policy state.
+                        self.voiceProgress = self.voicePolicy.awaitingRequest
+                            ? "Não ouvi uma frase. Ainda estou esperando sua pergunta."
+                            : self.voicePolicy.acceptsFollowUp()
+                                ? "Não ouvi uma frase. Pode continuar sem dizer TARS."
+                                : "Não ouvi uma frase."
+                        self.cancel(
+                            message: self.handsFree
+                                ? ((self.voicePolicy.awaitingRequest || self.voicePolicy.acceptsFollowUp())
+                                    ? "Estou ouvindo. Pode tentar de novo."
+                                    : "Diga TARS para conversar.")
+                                : "Não ouvi uma frase."
+                        )
                         return
                     case .keepListening: break
                     }
@@ -307,16 +318,24 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                     recorder.updateMeters()
                     let power = Double(recorder.averagePower(forChannel: 0))
                     self.level = min(1, max(0, (power + 55) / 45))
-                    if power > -40 { self.captureWindow.observeVoice(now: ProcessInfo.processInfo.systemUptime) }
+                    if power > -50 { self.captureWindow.observeVoice(now: ProcessInfo.processInfo.systemUptime) }
                     switch self.captureWindow.decision(now: ProcessInfo.processInfo.systemUptime) {
                     case .finish: self.finish(); return
                     case .discard:
-                        if self.handsFree { self.voicePolicy.reset() }
-                        if self.handsFree && !self.voicePolicy.awaitingRequest {
-                self.voicePolicy.replyFinished()
-            }
-            self.voiceProgress = "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."
-            self.cancel(message: self.handsFree ? "Aguardando TARS / Waiting for TARS" : "Não detectei fala.")
+                        // Online/multilingual silence must not revoke an already-authorized
+                        // wake or follow-up conversation.
+                        self.voiceProgress = self.voicePolicy.awaitingRequest
+                            ? "Não ouvi uma frase. Ainda estou esperando sua pergunta."
+                            : self.voicePolicy.acceptsFollowUp()
+                                ? "Não ouvi uma frase. Pode continuar sem dizer TARS."
+                                : "Não detectei fala."
+                        self.cancel(
+                            message: self.handsFree
+                                ? ((self.voicePolicy.awaitingRequest || self.voicePolicy.acceptsFollowUp())
+                                    ? "Estou ouvindo. Pode tentar de novo."
+                                    : "Aguardando TARS / Waiting for TARS")
+                                : "Não detectei fala."
+                        )
                         return
                     case .keepListening: break
                     }
@@ -473,6 +492,16 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
             return question
         }
         switch voicePolicy.consume(text, now: capturedAt) {
+        case .continueListening:
+            transcript = ""
+            voiceProgress = "TARS já está acordado; aguardando sua pergunta."
+            cancel(message: "Estou ouvindo.")
+            return nil
+        case .sleep:
+            transcript = ""
+            voiceProgress = "TARS em espera; diga TARS ou Wake up para acordar."
+            cancel(message: "Aguardando TARS / Waiting for TARS")
+            return nil
         case .ignore:
             voiceProgress = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "Nenhuma fala reconhecida."
@@ -488,12 +517,12 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
                 guard let self, !Task.isCancelled, self.generation == id else { return }
 
                 do {
-                    guard let respond else {
+                    guard let wakeRespond = self.wakeRespond ?? respond else {
                         self.speak("Online. Ready to assist.")
                         return
                     }
 
-                    let summary = try await respond(
+                    let summary = try await wakeRespond(
                         "What is in your mind? Give a concise readiness summary in one sentence, then ask how you can help.",
                         "auto"
                     )
@@ -712,6 +741,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     private func completedSpeech() {
         if handsFree && !voicePolicy.awaitingRequest { voicePolicy.replyFinished() }
+        writeVoiceDiagnostic(errorCode: nil, failedStage: "COMPLETED_SPEECH")
         voiceProgress = !handsFree ? "Resposta concluída. Escuta pausada." : voicePolicy.awaitingRequest
             ? "Pode fazer sua pergunta."
             : "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."

@@ -64,9 +64,17 @@ final class TarsHUDViewModel: ObservableObject {
         return try await client.synthesize(text: text)
     }
 
-    func converse(text: String, language: String) async throws -> String {
+    func converse(
+        text: String,
+        language: String,
+        context: [String: Any]? = nil
+    ) async throws -> String {
         if client.token == nil { try await client.pair(secret: pairingSecret) }
-        return try await client.converse(text: text, language: language)
+        return try await client.converse(
+            text: text,
+            language: language,
+            context: context
+        )
     }
 
     func transcribe(data: Data) async throws -> String {
@@ -167,7 +175,7 @@ final class TarsHUDViewModel: ObservableObject {
         }
     }
 
-    #if DEBUG && targetEnvironment(simulator)
+    #if DEBUG 
     func simulatorCommand(_ action: String) async {
         guard connected, virtualSimulator else {
             commandStatus = "Teste indisponível: conecte um Core com ESP32 virtual."

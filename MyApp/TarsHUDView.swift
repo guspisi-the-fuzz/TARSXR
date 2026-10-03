@@ -9,7 +9,7 @@ struct TarsHUDView: View {
     @State private var showsVision = false
     // Manual controls are opt-in diagnostics, never the normal interaction flow.
     private var manualDiagnostics: Bool {
-        #if DEBUG && targetEnvironment(simulator)
+#if DEBUG && targetEnvironment(simulator)
         return ProcessInfo.processInfo.environment["TARS_MANUAL_DIAGNOSTICS"] == "1"
         #else
         return false
@@ -71,7 +71,7 @@ struct TarsHUDView: View {
         #if DEBUG
         .sheet(isPresented: $showsVision) { VisionTestPanel(model: model, audio: audio) }
         #endif
-        #if DEBUG && targetEnvironment(simulator)
+#if DEBUG && targetEnvironment(simulator)
         .sheet(isPresented: $showsTests) {
             SimulatorTestPanel(model: model)
         }
@@ -98,7 +98,16 @@ struct TarsHUDView: View {
             audio.streamSpeech = { text, receive in try await model.streamSpeech(text: text, receive: receive) }
             audio.synthesize = { text in try await model.synthesize(text: text) }
             audio.transcribe = { data in try await model.transcribe(data: data) }
-            audio.respond = { text, language in try await model.converse(text: text, language: language) }
+            audio.respond = { text, language in
+                try await model.converse(text: text, language: language)
+            }
+            audio.wakeRespond = { text, language in
+                try await model.converse(
+                    text: text,
+                    language: language,
+                    context: ["internal_wake_summary": true]
+                )
+            }
             await model.run()
         }
         .task(id: scenePhase) {
@@ -258,8 +267,18 @@ struct EngineeringPanel: View {
                     Button("Tentar conexão novamente") { Task { await model.retryConnection() } }
                         .buttonStyle(.bordered)
                 }
+                
 
-            }.padding(14)
+                #if DEBUG
+                Button("Confirmar recuperação") {
+                    Task { await model.simulatorCommand("RECOVER") }
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.connected || !model.virtualSimulator || model.commandPending)
+                #endif
+
+                }.padding(14)
+            
         }
     }
     private func metricColumn(_ title: String, rows: [(String,String)]) -> some View {
