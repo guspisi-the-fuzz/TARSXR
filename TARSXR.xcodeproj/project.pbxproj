@@ -79,7 +79,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "Untitled Project" */;
+			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "TARSXR" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -115,7 +115,7 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		000000000000000011000000 /* Debug configuration for PBXProject "Untitled Project" */ = {
+		000000000000000011000000 /* Debug configuration for PBXProject "TARSXR" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -185,7 +185,7 @@
 			};
 			name = Debug;
 		};
-		000000000000000012000000 /* Release configuration for PBXProject "Untitled Project" */ = {
+		000000000000000012000000 /* Release configuration for PBXProject "TARSXR" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -252,16 +252,17 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H6M4NW38MB;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "O TARS conecta ao Core no seu Mac pela rede local.";
-				INFOPLIST_FILE = Config/TARS-Info.plist;
+				INFOPLIST_FILE = "Config/TARS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = TARS;
 				INFOPLIST_KEY_NSCameraUsageDescription = "O TARS captura uma foto quando você solicita. A imagem só é enviada à IA após sua ação de análise.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "O TARS conecta ao Core no seu Mac pela rede local.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O TARS usa o microfone quando você toca em Falar.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O TARS transcreve sua fala para o teste de áudio. O reconhecimento pode usar o serviço da Apple.";
-				INFOPLIST_KEY_CFBundleDisplayName = TARS;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -296,16 +297,17 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H6M4NW38MB;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "O TARS conecta ao Core no seu Mac pela rede local.";
-				INFOPLIST_FILE = Config/TARS-Info.plist;
+				INFOPLIST_FILE = "Config/TARS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = TARS;
 				INFOPLIST_KEY_NSCameraUsageDescription = "O TARS captura uma foto quando você solicita. A imagem só é enviada à IA após sua ação de análise.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "O TARS conecta ao Core no seu Mac pela rede local.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O TARS usa o microfone quando você toca em Falar.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O TARS transcreve sua fala para o teste de áudio. O reconhecimento pode usar o serviço da Apple.";
-				INFOPLIST_KEY_CFBundleDisplayName = TARS;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -338,11 +340,11 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		000000000000000010000000 /* Build configuration list for PBXProject "Untitled Project" */ = {
+		000000000000000010000000 /* Build configuration list for PBXProject "TARSXR" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000011000000 /* Debug configuration for PBXProject "Untitled Project" */,
-				000000000000000012000000 /* Release configuration for PBXProject "Untitled Project" */,
+				000000000000000011000000 /* Debug configuration for PBXProject "TARSXR" */,
+				000000000000000012000000 /* Release configuration for PBXProject "TARSXR" */,
 			);
 			defaultConfigurationName = Release;
 		};

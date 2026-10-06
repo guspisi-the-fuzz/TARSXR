@@ -52,7 +52,13 @@ struct VoiceActivationPolicy {
 
         guard awake else { return .ignore }
 
-        let request = wakeRange.map { String(text[$0.upperBound...]) } ?? text
+        // A wake/name mention can occur at the end or inside a real question.
+        // Strip only a leading address (including common greetings), never the
+        // words before an embedded name. Preserve the full question otherwise.
+        let leadingWakePattern =
+            #"(?i)^\s*(?:(?:ei|oi|olá|ola|hey|hi|hello|ok|okay)[\s,.:;!?—-]+)?(?:tars|wake\s+up)\b[\s,.:;!?—-]*"#
+        let leadingWake = text.range(of: leadingWakePattern, options: .regularExpression)
+        let request = leadingWake.map { String(text[$0.upperBound...]) } ?? text
         let cleaned = request.trimmingCharacters(in: .whitespacesAndNewlines)
 
         failures = 0
@@ -79,13 +85,22 @@ struct VoiceActivationPolicy {
     }
 }
 
-/// Bounded online sessions; foreground transitions never refill the allowance.
+/// Trial quotas are opt-in diagnostics. Operational sessions do not expire.
+/// Capture length, silence detection, permission and service-error gates are separate.
 struct OnlineVoiceTrialBudget {
     let duration: TimeInterval
     let maxUploads: Int
-    init(conversation: Bool = false) {
-        // Development bench: do not terminate an active voice session
-        // because of a short trial budget. Explicit sleep controls the session.
+    let isTrial: Bool
+    static func configured(_ session: String?) -> Self {
+        switch session {
+        case "trial": return Self()
+        case "trial-conversation": return Self(conversation: true)
+        default: return Self(continuous: true)
+        }
+    }
+    init(conversation: Bool = false, continuous: Bool = false) {
+        isTrial = !continuous
+        // These bounds are enforced only in an explicitly selected trial.
         duration = conversation ? 86400 : 180
         maxUploads = conversation ? 10000 : 6
     }
@@ -94,11 +109,13 @@ struct OnlineVoiceTrialBudget {
     mutating func begin(now: TimeInterval) { if startedAt == nil { startedAt = now } }
     func available(now: TimeInterval) -> Bool {
         guard let start = startedAt else { return false }
-        return now >= start && now.isFinite && start.isFinite && now - start < duration && uploads < maxUploads
+        guard now >= start, start >= 0, now.isFinite, start.isFinite else { return false }
+        return !isTrial || (now - start < duration && uploads < maxUploads)
     }
     mutating func reserveUpload(now: TimeInterval) -> Bool {
         guard available(now: now) else { return false }
-        uploads += 1
+        // Saturate the diagnostic counter rather than overflowing a long-lived session.
+        if uploads < Int.max { uploads += 1 }
         return true
     }
 }
@@ -131,5 +148,15 @@ struct VoiceCaptureWindow {
         if hasSpeech && now - lastVoiceAt >= 2.2 { return .finish }
         if !hasSpeech && elapsed >= 15 { return .discard }
         return .keepListening
+    }
+}
+
+/// Containment after physical XR acceptance failed with choppy streaming audio.
+/// Fetch the complete approved audio before playback. No voice/model substitution.
+/// Keep transport hooks for diagnostic tests, but quarantine every live stream path
+/// (including visual sessions and early-response flags) until device revalidation.
+enum VoicePlaybackPolicy {
+    static func shouldStream(configuration: String?, available: Bool, visualSession: Bool) -> Bool {
+        false
     }
 }

@@ -30,38 +30,26 @@ final class TarsHUDViewModel: ObservableObject {
         return "Mover envia um pulso de 250 ms ao simulador. E-STOP bloqueia novos movimentos até a recuperação."
     }
 
-    let baseURL: URL
-    private let pairingSecret: String
-    private let client: TARSClient
+    private let runtime: any TARSRuntime
 
-    init(baseURL: URL, pairingSecret: String) {
-        #if DEBUG
-        let baseURL = ProcessInfo.processInfo.environment["TARS_CORE_URL"].flatMap(URL.init(string:)) ?? baseURL
-        let pairingSecret = ProcessInfo.processInfo.environment["TARS_PAIRING_SECRET"] ?? pairingSecret
-        #endif
-        self.baseURL = baseURL
-        self.pairingSecret = pairingSecret
-        self.client = TARSClient(baseURL: baseURL)
+    init(runtime: any TARSRuntime) {
+        self.runtime = runtime
     }
 
     func streamSpeech(text: String, receive: @escaping @MainActor (Data) throws -> Void) async throws {
-        if client.token == nil { try await client.pair(secret: pairingSecret) }
-        try await client.streamSpeech(text: text, receive: receive)
+        try await runtime.streamSpeech(text: text, receive: receive)
     }
 
     func streamConversation(text: String, receive: @escaping @MainActor (Data) throws -> Void, receiveText: @escaping @MainActor (String) -> Void) async throws {
-        if client.token == nil { try await client.pair(secret: pairingSecret) }
-        try await client.streamSpeech(text: text, conversation: true, receiveText: receiveText, receive: receive)
+        try await runtime.streamConversation(text: text, receive: receive, receiveText: receiveText)
     }
 
     func describeImage(png: Data, source: String, question: String, history: [[String: String]] = []) async throws -> VisionReply {
-        if client.token == nil { try await client.pair(secret: pairingSecret) }
-        return try await client.describeImage(png: png, source: source, question: question, history: history)
+        return try await runtime.describeImage(png: png, source: source, question: question, history: history)
     }
 
     func synthesize(text: String) async throws -> Data {
-        if client.token == nil { try await client.pair(secret: pairingSecret) }
-        return try await client.synthesize(text: text)
+        return try await runtime.synthesize(text: text)
     }
 
     func converse(
@@ -69,8 +57,7 @@ final class TarsHUDViewModel: ObservableObject {
         language: String,
         context: [String: Any]? = nil
     ) async throws -> String {
-        if client.token == nil { try await client.pair(secret: pairingSecret) }
-        return try await client.converse(
+        return try await runtime.converse(
             text: text,
             language: language,
             context: context
@@ -78,8 +65,7 @@ final class TarsHUDViewModel: ObservableObject {
     }
 
     func transcribe(data: Data) async throws -> String {
-        if client.token == nil { try await client.pair(secret: pairingSecret) }
-        return try await client.transcribe(data: data)
+        return try await runtime.transcribe(data: data)
     }
 
     func run() async {
@@ -89,7 +75,7 @@ final class TarsHUDViewModel: ObservableObject {
 
         #if DEBUG && targetEnvironment(simulator)
         if connected && ProcessInfo.processInfo.environment["TARS_SIMULATOR_CHECKS"] == "1" {
-            commandStatus = await SimulatorSafetyChecks.run(client: client)
+            commandStatus = await SimulatorSafetyChecks.run(runtime: runtime)
         }
         #endif
         while !Task.isCancelled {
@@ -115,8 +101,7 @@ final class TarsHUDViewModel: ObservableObject {
         let start = ContinuousClock.now
 
         do {
-            if client.token == nil { try await client.pair(secret: pairingSecret) }
-            let data = try await client.request(path: "v1/hud")
+            let snapshot = try await runtime.hud()
 
             let elapsed = start.duration(to: .now)
 
@@ -124,18 +109,12 @@ final class TarsHUDViewModel: ObservableObject {
                 Double(elapsed.components.seconds) * 1000 +
                 Double(elapsed.components.attoseconds) / 1e15
 
-            let envelope = try JSONDecoder().decode(
-                APIEnvelope.self,
-                from: data
-            )
-
-            guard envelope.ok else { throw TARSClientError.unavailable }
-            apply(envelope.data, latencyMS: ms)
+            apply(snapshot, latencyMS: ms)
 
             connected = true
             reconnection.reset()
             needsConnectionHelp = false
-            let supervisor = envelope.data.system["supervisor"] ?? "UNMONITORED"
+            let supervisor = snapshot.system["supervisor"] ?? "UNMONITORED"
             if supervisor != "READY" && supervisor != "UNMONITORED" {
                 switch supervisor {
                 case "SUPERVISOR_RETRYING":
@@ -187,17 +166,16 @@ final class TarsHUDViewModel: ObservableObject {
         if serialized { commandPending = true }
         defer { if serialized { commandPending = false } }
         do {
-            if client.token == nil { try await client.pair(secret: pairingSecret) }
             if action == "RECOVER" {
-                let telemetry = try await client.telemetry()
+                let telemetry = try await runtime.telemetry()
                 if telemetry.emergencyStop {
-                    _ = try await client.command("CLEAR_ESTOP", params: .init(estopGeneration: telemetry.estopGeneration))
+                    _ = try await runtime.command("CLEAR_ESTOP", params: .init(estopGeneration: telemetry.estopGeneration))
                 }
-                try await client.recover()
+                try await runtime.recover()
                 commandStatus = "Recuperado; movimento continua parado."
             } else {
                 let params: TARSCommandParameters = action == "MOVE" ? .init(direction: "FORWARD", speed: 0.2, durationMS: 250) : .init()
-                let reply = try await client.command(action, params: params)
+                let reply = try await runtime.command(action, params: params)
                 commandStatus = "\(action == "MOVE" ? "Mover 250 ms" : action): \(reply.status) · \(reply.reason)"
                 if let telemetry = reply.telemetry {
                     motionStatus = telemetry.motionActive ? "Em movimento" : "Parado"
@@ -288,11 +266,6 @@ final class TarsHUDViewModel: ObservableObject {
 
         return raw + (f.unit.map { " \($0)" } ?? "")
     }
-}
-
-struct APIEnvelope: Codable {
-    let ok: Bool
-    let data: HUDSnapshot
 }
 
 extension ProcessInfo.ThermalState {

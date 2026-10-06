@@ -36,11 +36,16 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
-    private let pipelinedConversation = ProcessInfo.processInfo.environment["TARS_EARLY_RESPONSE"] == "1"
+    // The early conversation path must not bypass the streaming containment.
+    private let pipelinedConversation = VoicePlaybackPolicy.shouldStream(
+        configuration: ProcessInfo.processInfo.environment["TARS_EARLY_RESPONSE"],
+        available: true,
+        visualSession: false
+    )
     var streamConversation: ((String, @escaping @MainActor (Data) throws -> Void, @escaping @MainActor (String) -> Void) async throws -> Void)?
     var streamSpeech: ((String, @escaping @MainActor (Data) throws -> Void) async throws -> Void)?
     private var streamedPlayer: BufferedVoicePlayer?
-    private let streamingEnabled = ProcessInfo.processInfo.environment["TARS_STREAM_VOICE"] == "1"
+    private let streamingConfiguration = ProcessInfo.processInfo.environment["TARS_STREAM_VOICE"]
     var synthesize: ((String) async throws -> Data)?
     @Published private(set) var voiceSource = "Voz sintetizada local"
     private var speechTask: Task<Void, Never>?
@@ -72,7 +77,7 @@ private let bluetooth = BluetoothManager()
     private var resumeAfterInterruption = false
     private var voicePolicy = VoiceActivationPolicy()
     private var restartTask: Task<Void, Never>?
-    private var onlineTrial = OnlineVoiceTrialBudget(conversation: ProcessInfo.processInfo.environment["TARS_VOICE_SESSION"] == "conversation")
+    private var onlineTrial = OnlineVoiceTrialBudget.configured(ProcessInfo.processInfo.environment["TARS_VOICE_SESSION"])
     private var trialDeadline: Task<Void, Never>?
     #if DEBUG
     // Explicit diagnostic injection; absent from release and normal launches.
@@ -82,8 +87,16 @@ private let bluetooth = BluetoothManager()
     #endif
     #if DEBUG
     private var voiceLatency: [String: Double] = [:]
+    private var responseStartedAt: TimeInterval?
+    private func beginResponseTiming() {
+        voiceLatency = [:]
+        responseStartedAt = ProcessInfo.processInfo.systemUptime
+    }
     private func recordLatency(_ stage: String, since start: TimeInterval) {
-        voiceLatency[stage] = ProcessInfo.processInfo.systemUptime - start
+        let seconds = ProcessInfo.processInfo.systemUptime - start
+        voiceLatency[stage] = seconds
+        // Durations only. No transcript, response, audio, tokens or credentials.
+        print("[TARS_VOICE] \(stage)=\(String(format: "%.3f", seconds))")
         guard let data = try? JSONSerialization.data(withJSONObject: voiceLatency, options: [.sortedKeys]) else { return }
         // Overwrite only the latest timings. Never persist speech, text or credentials.
         try? data.write(to: URL.documentsDirectory.appendingPathComponent("voice-latency.json"), options: .atomic)
@@ -93,8 +106,13 @@ private let bluetooth = BluetoothManager()
 
     private func endOnlineTrial() {
         suspendHandsFree()
-        status = "TRIAL FINISHED"
-        message = "Sessão online encerrada: \(onlineTrial.uploads) de \(onlineTrial.maxUploads) envios; limite de \(Int(onlineTrial.duration / 60)) minutos."
+        if onlineTrial.isTrial {
+            status = "TRIAL FINISHED"
+            message = "Sessão de diagnóstico encerrada: \(onlineTrial.uploads) de \(onlineTrial.maxUploads) envios; limite de \(Int(onlineTrial.duration / 60)) minutos."
+        } else {
+            status = "CLOCK UNAVAILABLE"
+            message = "Escuta pausada: relógio de execução indisponível."
+        }
     }
 
     func enableHandsFree() async {
@@ -104,7 +122,7 @@ private let bluetooth = BluetoothManager()
             guard onlineTrial.available(now: ProcessInfo.processInfo.systemUptime) else {
                 endOnlineTrial(); return
             }
-            if trialDeadline == nil {
+            if onlineTrial.isTrial && trialDeadline == nil {
                 trialDeadline = Task { [weak self] in
                     do { try await Task.sleep(for: .seconds(self?.onlineTrial.duration ?? 180)) } catch { return }
                     self?.endOnlineTrial()
@@ -199,6 +217,9 @@ private let bluetooth = BluetoothManager()
             message = "Permita microfone e reconhecimento nos Ajustes para falar."
             return
         }
+        #if DEBUG
+        print("[TARS_VOICE] recognition=local-\(language); bilingual_auto=false")
+        #endif
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: language))
         guard let recognizer, recognizer.isAvailable else {
             fail("Reconhecimento de voz indisponível. Tente novamente."); return
@@ -296,6 +317,9 @@ private let bluetooth = BluetoothManager()
     }
 
     private func startMultilingualCapture(id: UUID) {
+        #if DEBUG
+        print("[TARS_VOICE] recognition=online-multilingual; language_hint=none")
+        #endif
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
@@ -368,6 +392,9 @@ private let bluetooth = BluetoothManager()
         stopCapture()
         let id = generation
         let capturedAt = ProcessInfo.processInfo.systemUptime
+        #if DEBUG
+        beginResponseTiming()
+        #endif
         state = "TRANSCRIBING"; status = "TRANSCRIBING"
         message = "Entendendo sua fala…"
         voiceProgress = "Enviando áudio para transcrição…"
@@ -379,9 +406,10 @@ private let bluetooth = BluetoothManager()
                         self.endOnlineTrial(); return
                     }
                 }
-                self.voiceProgress = "Transcrevendo · envio \(self.onlineTrial.uploads)/\(self.onlineTrial.maxUploads)"
+                self.voiceProgress = self.onlineTrial.isTrial
+                    ? "Transcrevendo · envio \(self.onlineTrial.uploads)/\(self.onlineTrial.maxUploads)"
+                    : "Transcrevendo · envio \(self.onlineTrial.uploads)"
                 #if DEBUG
-                self.voiceLatency = [:]
                 let transcriptionStarted = ProcessInfo.processInfo.systemUptime
                 #endif
                 let text = try await transcribe(data)
@@ -451,6 +479,9 @@ private let bluetooth = BluetoothManager()
         if recorder != nil { finishMultilingualCapture(); return }
         let recognized = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         stopCapture()
+        #if DEBUG
+        beginResponseTiming()
+        #endif
         guard let text = routeRecognizedSpeech(
             recognized,
             respond: self.respond
@@ -464,10 +495,16 @@ private let bluetooth = BluetoothManager()
             conversationTask = Task { [weak self] in
                 guard let self, !Task.isCancelled, self.generation == id else { return }
                 do {
+                    #if DEBUG
+                    let answerStarted = ProcessInfo.processInfo.systemUptime
+                    #endif
                     let answer: String
                     if let visual = self.visualRespond { answer = try await visual(text) }
                     else { answer = try await respond(text, self.language) }
                     guard !Task.isCancelled, self.generation == id else { return }
+                    #if DEBUG
+                    self.recordLatency("answer_seconds", since: answerStarted)
+                    #endif
                     self.speak(answer)
                 } catch {
                     guard !Task.isCancelled, self.generation == id else { return }
@@ -572,14 +609,24 @@ private let bluetooth = BluetoothManager()
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
         #endif
         guard useAI else { speakLocally(text); return }
+        if VoicePlaybackPolicy.shouldStream(
+            configuration: streamingConfiguration,
+            available: streamSpeech != nil,
+            visualSession: visualRespond != nil
+        ), let streamSpeech {
+            #if DEBUG
+            print("[TARS_VOICE] delivery=stream")
+            #endif
+            speakStreamed(text, stream: streamSpeech)
+            return
+        }
         guard let synthesize else {
             fail("A voz do TARS ainda não está conectada. A resposta continua em texto.")
             return
         }
-        if streamingEnabled || visualRespond != nil, let streamSpeech {
-            speakStreamed(text, stream: streamSpeech)
-            return
-        }
+        #if DEBUG
+        print("[TARS_VOICE] delivery=batch")
+        #endif
         speechTask?.cancel()
         let id = generation
         state = "PREPARING"; status = "PREPARING"
@@ -604,6 +651,9 @@ private let bluetooth = BluetoothManager()
                 guard player.play() else { throw TARSClientError.unavailable }
                 #if DEBUG
                 self.recordLatency("voice_until_play_seconds", since: synthesisStarted)
+                if let responseStart = self.responseStartedAt {
+                    self.recordLatency("after_capture_until_play_seconds", since: responseStart)
+                }
                 #endif
                 self.state = "SPEAKING"; self.status = "SPEAKING"
                 self.voiceProgress = "Reproduzindo voz natural."
@@ -638,6 +688,9 @@ private let bluetooth = BluetoothManager()
                     self.voiceProgress = "Reproduzindo voz natural."
                     #if DEBUG
                     self.recordLatency(isConversation ? "first_audio_after_transcription_seconds" : "voice_until_play_seconds", since: started)
+                    if let responseStart = self.responseStartedAt {
+                        self.recordLatency("after_capture_until_play_seconds", since: responseStart)
+                    }
                     #endif
                 }
                 player.onFinish = { [weak self] in
@@ -742,7 +795,8 @@ private let bluetooth = BluetoothManager()
         voiceProgress = message
         if handsFree {
             voicePolicy.failed()
-            if !onlineWake { language = language == "pt-BR" ? "en-US" : "pt-BR" }
+            // A service/capture failure is not evidence that the speaker changed
+            // language. Never switch the local recognizer after an error.
             if voicePolicy.failures >= 6 { handsFree = false }
         }
         cancel(message: message); status = "UNAVAILABLE"
