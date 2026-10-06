@@ -14,6 +14,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var message = "Diga TARS para conversar quando a escuta estiver disponível."
     @Published private(set) var level: Double = 0
     @Published private(set) var inputName = ""
+    @Published private(set) var bluetoothConnected = false
+    @Published private(set) var bluetoothDevice = ""
     private func writeVoiceDiagnostic(errorCode: String? = nil, failedStage: String? = nil) {
         #if DEBUG
         // Only state metadata: never speech, images, audio or credentials.
@@ -59,6 +61,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     var visualRespond: ((String) async throws -> String)?
     @Published var useAI = false
     private var tapInstalled = false
+    
+private let bluetooth = BluetoothManager()
     private var generation = UUID()
     private var captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
     private var utterance: AVSpeechUtterance?
@@ -161,6 +165,11 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
         generation = UUID()
         let id = generation
+
+        bluetooth.refresh()
+
+        bluetoothConnected = bluetooth.isConnected
+        bluetoothDevice = bluetooth.deviceName
         #if DEBUG
         if let simulatedCapture {
             state = "LISTENING"
