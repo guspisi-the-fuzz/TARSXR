@@ -596,6 +596,11 @@ final class MemoryTARSRuntime: TARSRuntime {
         let excluded = exclusion(from: key)
         let asksHome = key == "quem mora comigo" || key == "quem mora com voce" || key == "quem mora aqui" || key == "quem mora na minha casa" || key == "quem mais mora comigo" || key == "quem mais mora com voce" || excluded != nil
         let asksAlias = key.contains("dani") && key.contains("daniela") && (key.contains("mesma pessoa") || key.contains("apelido"))
+
+        let looksLikeSaveCommand = key.hasPrefix("salva ") || key.hasPrefix("salve ") || key.hasPrefix("guarda ") || key.hasPrefix("guarde ") || key.hasPrefix("memoriza ") || key.hasPrefix("memorize ") || key.hasPrefix("lembra ") || key.hasPrefix("lembre ") || key.contains(" salva essa ") || key.contains(" salva esta ") || key.contains(" salva essas ") || key.contains(" salva estes ") || key.contains(" salve essa ") || key.contains(" salve esta ") || key.contains(" salve essas ") || key.contains(" salve estes ") || key.contains(" guarde isso") || key.contains(" guarde essa") || key.contains(" guarde esta") || key.contains("guardar no xr") || key.contains("salvar no xr")
+        let asksStatus = !looksLikeSaveCommand
+            && (key.contains("salv") || key.contains("xr") || key.contains("conversa") || key.contains("chat") || key.contains("memoria"))
+            && (key.contains("essa informacao") || key.contains("esta informacao") || key.contains("isso") || key.contains("so nessa conversa") || key.contains("so nesta conversa") || key.contains("so nesse chat") || key.contains("so neste chat") || key.contains("salva no xr") || key.contains("salvo no xr") || key.contains("salva neste xr") || key.contains("salvo neste xr") || key.contains("memoria local"))
         let asksPerson: (key: String, display: String)? = {
             if key.hasPrefix("quem e ") {
                 let value = canonical(String(key.dropFirst("quem e ".count)))
@@ -607,7 +612,23 @@ final class MemoryTARSRuntime: TARSRuntime {
             }
             return nil
         }()
-        guard asksHome || asksPerson != nil || asksAlias else { return nil }
+        guard asksHome || asksPerson != nil || asksAlias || asksStatus else { return nil }
+        if asksStatus {
+            let now = ProcessInfo.processInfo.systemUptime
+            let recentlyAnsweredFromMemory = lastRecallAt > 0 && (now - lastRecallAt) <= 300.0
+            let hasSavedFacts: Bool
+            if let statusDocument = try? store.load() {
+                hasSavedFacts = !statusDocument.facts.isEmpty
+            } else {
+                hasSavedFacts = false
+            }
+            lastRecallAt = now
+            invalidateConversation()
+            if recentlyAnsweredFromMemory || hasSavedFacts {
+                return english ? "The information is saved in this XR's local memory." : "Essa informação está salva na memória local deste XR."
+            }
+            return english ? "I did not find that information saved on this XR." : "Não encontrei essa informação salva neste XR."
+        }
         if asksAlias {
             lastKeys = []
             lastRecallAt = ProcessInfo.processInfo.systemUptime
