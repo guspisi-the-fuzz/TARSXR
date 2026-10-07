@@ -77,6 +77,309 @@ enum ReferencePhoto {
     }
 }
 
+// MARK: - XR_VOICE_CAMERA_28
+
+enum VoiceCameraError: LocalizedError {
+    case unavailable
+    case denied
+    case invalidImage
+    case captureFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Câmera indisponível neste XR."
+        case .denied:
+            return "Câmera não autorizada. Permita o acesso à câmera nos Ajustes do iOS."
+        case .invalidImage:
+            return "Capturei a imagem, mas não consegui prepará-la para análise."
+        case .captureFailed:
+            return "Não consegui capturar a imagem agora."
+        }
+    }
+}
+
+struct VoiceCameraCommand: Equatable {
+    enum Kind: Equatable {
+        case describe
+        case findMel
+        case photo
+        case selfie
+    }
+
+    let kind: Kind
+    let position: AVCaptureDevice.Position
+    let source: String
+    let question: String
+
+    static func parse(_ raw: String) -> VoiceCameraCommand? {
+        let text = normalize(raw)
+        guard !text.isEmpty else { return nil }
+
+        let mentionsVision =
+            text.contains("camera") ||
+            text.contains("foto") ||
+            text.contains("selfie") ||
+            text.contains("vendo") ||
+            text.contains("ve ") ||
+            text.contains("ver ") ||
+            text.contains("olha") ||
+            text.contains("olhe") ||
+            text.contains("procura") ||
+            text.contains("procurar") ||
+            text.contains("ache") ||
+            text.contains("encontre") ||
+            text.contains("mel")
+
+        guard mentionsVision else { return nil }
+
+        if text.contains("selfie") || text.contains("minha cara") || text.contains("meu rosto") {
+            return VoiceCameraCommand(
+                kind: .selfie,
+                position: .front,
+                source: "reference",
+                question: "Analise esta selfie capturada pela câmera frontal do XR. Descreva objetivamente o que aparece, sem inventar identidade ou detalhes fora da imagem."
+            )
+        }
+
+        if (text.contains("mel") && (
+            text.contains("procura") ||
+            text.contains("procurar") ||
+            text.contains("ache") ||
+            text.contains("acha") ||
+            text.contains("encontre") ||
+            text.contains("cade") ||
+            text.contains("onde esta") ||
+            text.contains("onde ta") ||
+            text.contains("vendo") ||
+            text.contains("ve")
+        )) {
+            return VoiceCameraCommand(
+                kind: .findMel,
+                position: .back,
+                source: "reference",
+                question: "Analise esta imagem da câmera traseira do XR e diga se há uma gata visível que possa ser a Mel. Seja objetivo: diga se encontrou, onde ela parece estar na imagem e o nível de confiança. Não afirme que é a Mel se não houver gato visível."
+            )
+        }
+
+        // Voice camera V28C parser expansion: commands like
+        // “abre a câmera” must capture and describe instead of falling through to generic AI.
+        if text.contains("abre a camera") ||
+            text.contains("abre camera") ||
+            text.contains("abrir a camera") ||
+            text.contains("abrir camera") ||
+            text.contains("liga a camera") ||
+            text.contains("liga camera") ||
+            text.contains("ativa a camera") ||
+            text.contains("ativa camera") ||
+            text.contains("ative a camera") ||
+            text.contains("ative camera") ||
+            text.contains("usa a camera") ||
+            text.contains("use a camera") {
+            return VoiceCameraCommand(
+                kind: .describe,
+                position: .back,
+                source: "reference",
+                question: "Descreva objetivamente o que aparece nesta imagem capturada pela câmera traseira do XR. Não estime distâncias métricas e não assuma movimento ou navegação."
+            )
+        }
+
+        if text.contains("o que voce esta vendo") ||
+            text.contains("o que voce ta vendo") ||
+            text.contains("o que vc esta vendo") ||
+            text.contains("o que vc ta vendo") ||
+            text.contains("o que ce esta vendo") ||
+            text.contains("o que ce ta vendo") ||
+            text.contains("o que esta vendo") ||
+            text.contains("o que ta vendo") ||
+            text.contains("que que voce esta vendo") ||
+            text.contains("que que voce ta vendo") ||
+            text.contains("que que ta vendo") ||
+            text.contains("o que voce ve") ||
+            text.contains("o que vc ve") ||
+            text.contains("o que ce ve") ||
+            text.contains("o que ve") ||
+            text.contains("o que voce esta enxergando") ||
+            text.contains("o que voce ta enxergando") ||
+            text.contains("o que esta enxergando") ||
+            text.contains("o que ta enxergando") ||
+            text.contains("descreva o que voce ve") ||
+            text.contains("descreva o que esta vendo") ||
+            text.contains("descreva o que ta vendo") ||
+            text.contains("olhe em volta") ||
+            text.contains("olha em volta") {
+            return VoiceCameraCommand(
+                kind: .describe,
+                position: .back,
+                source: "reference",
+                question: "Descreva objetivamente o que aparece nesta imagem capturada pela câmera traseira do XR. Não estime distâncias métricas e não assuma movimento ou navegação."
+            )
+        }
+
+        if text.contains("tira uma foto") ||
+            text.contains("tira foto") ||
+            text.contains("tirar uma foto") ||
+            text.contains("tirar foto") ||
+            text.contains("tire uma foto") ||
+            text.contains("tire foto") ||
+            text.contains("captura uma foto") ||
+            text.contains("captura foto") ||
+            text.contains("capture uma foto") ||
+            text.contains("capture foto") ||
+            text.contains("bate uma foto") ||
+            text.contains("bate foto") ||
+            text.contains("fotografa") {
+            return VoiceCameraCommand(
+                kind: .photo,
+                position: .back,
+                source: "reference",
+                question: "Foto capturada pela câmera traseira do XR. Descreva rapidamente o conteúdo principal da imagem."
+            )
+        }
+
+        return nil
+    }
+
+    private static func normalize(_ raw: String) -> String {
+        raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "pt_BR"))
+            .lowercased()
+            .replacingOccurrences(of: "tars", with: " ")
+            .replacingOccurrences(of: "t ars", with: " ")
+            .replacingOccurrences(of: "t a r s", with: " ")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+}
+
+@MainActor
+enum VoiceCameraAction {
+    static func captureAndDescribe(command: VoiceCameraCommand, model: TarsHUDViewModel) async throws -> String {
+        let image = try await VoiceStillCamera.capture(position: command.position)
+        guard let normalized = ReferencePhoto.normalize(image) else { throw VoiceCameraError.invalidImage }
+        let reply = try await model.describeImage(
+            png: normalized.png,
+            source: command.source,
+            question: command.question
+        )
+        return reply.description
+    }
+}
+
+final class VoiceStillCamera: NSObject, AVCapturePhotoCaptureDelegate {
+    private let position: AVCaptureDevice.Position
+    private let session = AVCaptureSession()
+    private let output = AVCapturePhotoOutput()
+    private let queue = DispatchQueue(label: "tars.xr.voice.camera.capture")
+    private var continuation: CheckedContinuation<UIImage, Error>?
+    private var finished = false
+
+    init(position: AVCaptureDevice.Position) {
+        self.position = position
+        super.init()
+    }
+
+    static func capture(position: AVCaptureDevice.Position) async throws -> UIImage {
+        guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) != nil ||
+              AVCaptureDevice.default(for: .video) != nil else {
+            throw VoiceCameraError.unavailable
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            break
+        case .notDetermined:
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            guard granted else { throw VoiceCameraError.denied }
+        default:
+            throw VoiceCameraError.denied
+        }
+
+        let camera = VoiceStillCamera(position: position)
+        return try await camera.capture()
+    }
+
+    private func capture() async throws -> UIImage {
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                self.queue.async {
+                    do {
+                        try self.configure()
+                        self.session.startRunning()
+                        guard self.session.isRunning else { throw VoiceCameraError.captureFailed }
+                        let settings = AVCapturePhotoSettings()
+                        self.output.capturePhoto(with: settings, delegate: self)
+                    } catch {
+                        self.complete(.failure(error))
+                    }
+                }
+            }
+        }, onCancel: {
+            self.complete(.failure(CancellationError()))
+        })
+    }
+
+    private func configure() throws {
+        session.beginConfiguration()
+        session.sessionPreset = .photo
+        defer { session.commitConfiguration() }
+
+        let device =
+            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+            AVCaptureDevice.default(for: .video)
+
+        guard let device else { throw VoiceCameraError.unavailable }
+
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input), session.canAddOutput(output) else {
+            throw VoiceCameraError.unavailable
+        }
+
+        session.addInput(input)
+        session.addOutput(output)
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput,
+                     didFinishProcessingPhoto photo: AVCapturePhoto,
+                     error: Error?) {
+        if let error {
+            complete(.failure(error))
+            return
+        }
+
+        guard let data = photo.fileDataRepresentation(),
+              let image = UIImage(data: data) else {
+            complete(.failure(VoiceCameraError.captureFailed))
+            return
+        }
+
+        complete(.success(image))
+    }
+
+    private func complete(_ result: Result<UIImage, Error>) {
+        queue.async {
+            guard !self.finished else { return }
+            self.finished = true
+            if self.session.isRunning { self.session.stopRunning() }
+
+            DispatchQueue.main.async {
+                guard let continuation = self.continuation else { return }
+                self.continuation = nil
+                switch result {
+                case .success(let image):
+                    continuation.resume(returning: image)
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+}
+
+
+
 #if DEBUG
 @MainActor
 enum ReferenceCameraChecks {
@@ -118,4 +421,25 @@ enum ReferenceCameraChecks {
         try check(cancelled, "Camera cancel did not return empty result")
     }
 }
+@MainActor
+enum VoiceCameraCommandChecks {
+    static func run() throws {
+        func check(_ value: Bool, _ message: String) throws {
+            if !value { throw NSError(domain: message, code: 1) }
+        }
+
+        try check(VoiceCameraCommand.parse("TARS, o que você está vendo?")?.kind == .describe, "Voice camera describe command not detected")
+        try check(VoiceCameraCommand.parse("TARS, o que você tá vendo?")?.kind == .describe, "Voice camera colloquial ta vendo not detected")
+        try check(VoiceCameraCommand.parse("TARS, abre a câmera aí")?.kind == .describe, "Voice camera open camera command not detected")
+        try check(VoiceCameraCommand.parse("TARS, procure a Mel")?.kind == .findMel, "Voice camera Mel command not detected")
+        try check(VoiceCameraCommand.parse("TARS, cadê a Mel?")?.kind == .findMel, "Voice camera colloquial Mel command not detected")
+        try check(VoiceCameraCommand.parse("TARS, tire uma foto")?.kind == .photo, "Voice camera photo command not detected")
+        try check(VoiceCameraCommand.parse("TARS, tira foto")?.kind == .photo, "Voice camera short photo command not detected")
+        try check(VoiceCameraCommand.parse("TARS, tira uma selfie")?.position == .front, "Voice camera selfie must use front camera")
+        try check(VoiceCameraCommand.parse("me conta uma piada") == nil, "Non-camera command routed to camera")
+    }
+}
+
+
+
 #endif

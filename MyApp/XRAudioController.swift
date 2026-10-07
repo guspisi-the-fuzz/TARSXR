@@ -930,6 +930,7 @@ extension XRAudioController {
             try await Task.sleep(for: .milliseconds(100))
             try require(!cancelled.hasStarted && completions == 1, "Cancelled stream completed or played")
             try await ReferenceCameraChecks.run()
+            try VoiceCameraCommandChecks.run()
             var cameraGate = ReferenceCaptureGate()
             let oldCapture = cameraGate.begin()
             cameraGate.cancel()

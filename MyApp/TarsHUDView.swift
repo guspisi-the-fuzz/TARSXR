@@ -99,7 +99,10 @@ struct TarsHUDView: View {
             audio.synthesize = { text in try await model.synthesize(text: text) }
             audio.transcribe = { data in try await model.transcribe(data: data) }
             audio.respond = { text, language in
-                try await model.converse(text: text, language: language)
+                if let camera = VoiceCameraCommand.parse(text) {
+                    return try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
+                }
+                return try await model.converse(text: text, language: language)
             }
             audio.wakeRespond = { text, language in
                 try await model.converse(
