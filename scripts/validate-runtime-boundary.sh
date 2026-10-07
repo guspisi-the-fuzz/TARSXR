@@ -39,12 +39,19 @@ run_check reconnection MyApp/ReconnectionPolicy.swift Tests/ReconnectionPolicyCh
 run_check pronunciation MyApp/AudioTestPronunciation.swift Tests/AudioTestPronunciationChecks.swift
 run_check voice MyApp/VoiceActivationPolicy.swift Tests/VoiceActivationChecks.swift
 run_check device-clock MyApp/XRDeviceClock.swift Tests/XRDeviceClockChecks.swift
+MEMORY=(MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift)
+export TARS_MEMORY_FIXTURE_OUT="$OUT/xr-memory-wire-fixture.json"
+run_check persistent-memory MyApp/HUDModels.swift MyApp/TARSRuntime.swift "${MEMORY[@]}" Tests/XRMemoryChecks.swift
+run_check memory-trace -DDEBUG MyApp/HUDModels.swift MyApp/TARSRuntime.swift "${MEMORY[@]}" Tests/XRMemoryDiagnosticsChecks.swift
+run_check memory-speech-intent MyApp/HUDModels.swift MyApp/TARSRuntime.swift "${MEMORY[@]}" MyApp/VoiceActivationPolicy.swift Tests/XRMemorySpeechIntentChecks.swift
+run_check memory-relations -DDEBUG MyApp/HUDModels.swift MyApp/TARSRuntime.swift "${MEMORY[@]}" MyApp/VoiceActivationPolicy.swift Tests/XRMemoryRelationChecks.swift
 COMMON=(MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/RemoteTARSRuntime.swift MyApp/XRDeviceClock.swift)
 run_check remote-runtime "${COMMON[@]}" Tests/RemoteRuntimeChecks.swift
 if [[ "$(uname -s)" == Darwin ]]; then
   run_check concrete-client "${COMMON[@]}" MyApp/TARSClient.swift Tests/ClientReconnectionChecks.swift
   run_check concrete-runtime "${COMMON[@]}" MyApp/TARSClient.swift Tests/RuntimeHTTPChecks.swift
   run_check device-clock-http "${COMMON[@]}" MyApp/TARSClient.swift Tests/XRClockHTTPChecks.swift
+  run_check memory-http "${COMMON[@]}" "${MEMORY[@]}" MyApp/TARSClient.swift Tests/XRMemoryHTTPChecks.swift
   build_ios Debug 'iOS Simulator' debug-after-tests
   build_ios Release iOS release-device
   printf 'PASS: Swift checks + Debug/Release iOS builds. Device behavior not tested.\n' | tee "$OUT/RESULT.txt"

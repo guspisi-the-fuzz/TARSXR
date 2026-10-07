@@ -22,10 +22,10 @@ struct MyApp: App {
         baseURL = coreURL
         pairingSecret = "tars-xr-local-test"
         #endif
-        return RemoteTARSRuntime(
+        return MemoryTARSRuntime(underlying: RemoteTARSRuntime(
             client: TARSClient(baseURL: baseURL),
             pairingSecret: pairingSecret
-        )
+        ))
     }
 
     var body: some Scene {
