@@ -42,6 +42,18 @@ import Foundation
         precondition(MusicCommand.parse("Play Nina Simone Stars") == .play("Nina Simone Stars"))
         precondition(MusicCommand.parse("Não toca essa música") == nil)
         precondition(MusicCommand.parse("Don't play the music") == nil)
+        precondition(MusicCommand.parse("Então toca Secretária.") == .play("Secretária."))
+        precondition(MusicCommand.parse("Play Secretária.") == .play("Secretária."))
+        precondition(MusicCommand.parse("Toca Secretária, Amado Batista.") == .play("Secretária, Amado Batista."))
+        for phrase in ["Começa de novo.", "TARS, começa do início", "Start over", "Toca de novo", "Reinicia a faixa, vai.", "Reinicie a faixa", "Restart"] {
+            precondition(MusicCommand.parse(phrase, mediaActive: true) == .restart)
+        }
+        precondition(MusicCommand.parse("Start", mediaActive: true) == .resume)
+        precondition(MusicCommand.parse("Start") == nil)
+        precondition(MusicCommand.parse("Tá bom, para.", mediaActive: true) == .stop)
+        precondition(MusicInterruption.phrase(in: "Tá bom, para.", mediaActive: true) == "TARS, pare a música")
+        precondition(MusicCommand.parse("Então não toca Secretária") == nil)
+        precondition(MusicCommand.parse("Play Então", mediaActive: true) == .play("Então"))
         print("PASS: music commands, safe routing, real HTML parser")
     }
 }

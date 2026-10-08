@@ -6,16 +6,20 @@ struct YouTubeTrack: Equatable {
 }
 
 enum MusicCommand: Equatable {
-    case play(String), pause, resume, stop
+    case play(String), pause, resume, restart, stop
     static func parse(_ raw: String, mediaActive: Bool = false) -> MusicCommand? {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         text = text.replacingOccurrences(of: #"(?i)^\s*(?:ei[, ]+)?tars\b[, :]*"#, with: "", options: .regularExpression)
+        // Strip conversational lead-ins, preserving song titles and negations.
+        text = text.replacingOccurrences(of: #"(?i)^(?:(?:ent[aã]o|t[aá] bom|okay|ok|por favor)[,\s]+)+"#, with: "", options: .regularExpression)
         let normalized = text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "pt_BR")).lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
         if mediaActive {
             if ["pause", "pausa", "pausar"].contains(normalized) { return .pause }
-            if ["play", "continue", "continua", "resume"].contains(normalized) { return .resume }
+            if ["play", "start", "continue", "continua", "resume"].contains(normalized) { return .resume }
             if ["stop", "pare", "para"].contains(normalized) { return .stop }
         }
+        if normalized.range(of: #"^reinici[ae]\s+(?:(?:a|essa|esta)\s+)?(?:faixa|musica)(?:,?\s+(?:vai|por favor))?$"#, options: .regularExpression) != nil { return .restart }
+        if ["comeca de novo", "comece de novo", "comeca do inicio", "comece do inicio", "toca de novo", "toque de novo", "restart", "start over", "restart the music"].contains(normalized) { return .restart }
         if ["pause a musica", "pausa a musica", "pausar musica", "pause the music", "pause music"].contains(normalized) { return .pause }
         if ["continue a musica", "continua a musica", "continua com a musica", "continue com a musica", "retome a musica", "retoma a musica", "play the music", "resume the music", "continue the music", "play it"].contains(normalized) { return .resume }
         if ["pare a musica", "para a musica", "parar a musica", "encerre a musica", "stop the music", "stop music"].contains(normalized) { return .stop }
@@ -117,6 +121,7 @@ enum MusicInterruption {
         switch MusicCommand.parse(candidate, mediaActive: true) {
         case .pause: return "TARS, pause a música"
         case .stop: return "TARS, pare a música"
+        case .restart: return "TARS, começa de novo"
         default: return nil
         }
     }

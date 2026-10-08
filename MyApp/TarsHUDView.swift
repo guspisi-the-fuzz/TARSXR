@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import ImageIO
 import AVFoundation
+import WebKit
 
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
@@ -142,7 +143,17 @@ struct TarsHUDView: View {
                     audio.submitMusicProbeSpeech("TARS, continua com a música")
                     try? await Task.sleep(for: .seconds(3))
                     let resumeOK = await listening("after resume", playing: true)
-                    stable = stable && ready && pauseOK && resumeOK
+                    audio.submitMusicProbeSpeech("TARS, começa de novo")
+                    try? await Task.sleep(for: .seconds(2))
+                    let restartOK = await listening("after restart", playing: true)
+                    let position = try? await music.webView.evaluateJavaScript("player.getCurrentTime()")
+                    let seekOK = (position as? Double).map { $0 < 6 } ?? false
+                    observations.append("restart position below 6s=\(seekOK)")
+                    audio.submitMusicProbeSpeech("TARS, tá bom, para")
+                    try? await Task.sleep(for: .seconds(2))
+                    let stopOK = music.track == nil
+                    observations.append("stop cleared track=\(stopOK)")
+                    stable = stable && ready && pauseOK && resumeOK && restartOK && seekOK && stopOK
                     audio.suspendHandsFree()
                     _ = await music.handle(.stop)
                     result = (stable ? "PASS: music + listening, microphone restarts, routed pause and resume" : "FAIL: music/listening stability") + "\n" + observations.joined(separator: "\n")

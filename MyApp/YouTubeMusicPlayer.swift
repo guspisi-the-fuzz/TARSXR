@@ -48,7 +48,7 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
             if query.isEmpty { titleRequestedAt = Date(); return "Qual música e artista você quer ouvir?" }
             titleRequestedAt = nil
             let id = UUID(); generation = id
-            status = "Buscando no YouTube…"; errorMessage = nil; isPlaying = false
+            status = "Buscando no YouTube…"; errorMessage = nil; isPlaying = false; playbackState = -1
             webView.loadHTMLString("", baseURL: nil); track = nil
             do {
                 let found = try await YouTubeSearch.find(query)
@@ -101,6 +101,19 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
                 }
                 return "O YouTube não confirmou a retomada. Toque em Play no vídeo."
             } catch { return "Não consegui retomar o vídeo agora." }
+        case .restart:
+            guard track != nil else { return "Diga o nome da música que você quer ouvir." }
+            errorMessage = nil
+            do {
+                _ = try await webView.evaluateJavaScript("(()=>{player.seekTo(0,true);player.playVideo();return true})()")
+                for _ in 0..<25 {
+                    try await Task.sleep(for: .milliseconds(200))
+                    let restarted = try await webView.evaluateJavaScript("player.getPlayerState()===1 && player.getCurrentTime()<3")
+                    if restarted as? Bool == true { return "" }
+                    if let errorMessage { return errorMessage }
+                }
+                return "O YouTube ainda não confirmou o reinício da música."
+            } catch { return "Não consegui reiniciar o vídeo agora." }
         case .stop:
             generation = UUID(); titleRequestedAt = nil
             webView.loadHTMLString("", baseURL: nil); track = nil; isPlaying = false; status = ""
