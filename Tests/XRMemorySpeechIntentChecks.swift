@@ -75,6 +75,11 @@ struct XRMemorySpeechIntentChecks {
         check(XRMemoryIntent.parse("Guarde que " + String(repeating: "x", count: 81) + " é um sujeito") == .help, "subject bound")
         check(XRMemoryIntent.parse("Guarde que a Mel é " + String(repeating: "x", count: 500)) == .help, "statement bound")
 
+        for question in ["Que dia é meu aniversário", "Que dia é o meu aniversário?", "Que data é meu aniversário", "TARS, por favor, que dia é meu aniversário"] {
+            check(XRMemoryIntent.isQuestionLike(question), "birthday stays a question")
+            check(XRMemoryIntent.parse(question) == .recall("meu aniversário", explicit: true), "birthday recalled locally")
+            check(XRMemoryIntent.suggestedFact(question) == nil, "question never offered as a fact")
+        }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("tars-memory-intent-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

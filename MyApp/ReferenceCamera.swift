@@ -113,7 +113,7 @@ struct VoiceCameraCommand: Equatable {
     let question: String
 
     static func parse(_ raw: String) -> VoiceCameraCommand? {
-        let text = normalize(raw)
+        let text = normalize(SpokenRequest.clean(raw))
         guard !text.isEmpty else { return nil }
 
         let mentionsVision =
@@ -396,7 +396,7 @@ struct ExternalAccessCommand: Equatable {
     let query: String?
 
     static func parse(_ raw: String) -> ExternalAccessCommand? {
-        let text = normalize(raw)
+        let text = normalize(SpokenRequest.clean(raw))
         guard !text.isEmpty, hasAccessIntent(text) else { return nil }
 
         if text.contains("deezer") {

@@ -8,7 +8,7 @@ struct YouTubeTrack: Equatable {
 enum MusicCommand: Equatable {
     case play(String), pause, resume, restart, stop
     static func parse(_ raw: String, mediaActive: Bool = false) -> MusicCommand? {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = SpokenRequest.clean(raw)
         text = text.replacingOccurrences(of: #"(?i)^\s*(?:ei[, ]+)?tars\b[, :]*"#, with: "", options: .regularExpression)
         // Strip conversational lead-ins, preserving song titles and negations.
         text = text.replacingOccurrences(of: #"(?i)^(?:(?:ent[aã]o|t[aá] bom|okay|ok|por favor)[,\s]+)+"#, with: "", options: .regularExpression)

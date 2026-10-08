@@ -58,7 +58,7 @@ final class TarsHUDViewModel: ObservableObject {
         context: [String: Any]? = nil
     ) async throws -> String {
         return try await runtime.converse(
-            text: text,
+            text: SpokenRequest.clean(text),
             language: language,
             context: context
         )

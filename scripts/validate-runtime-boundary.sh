@@ -18,7 +18,7 @@ fi
 run_check() {
   local name="$1"; shift
   echo "Compilando e testando: $name"
-  if ! "$SWIFTC" "${SWIFT_FLAGS[@]}" "$@" -o "$OUT/$name" > "$OUT/$name.build.log" 2>&1; then
+  if ! "$SWIFTC" "${SWIFT_FLAGS[@]}" MyApp/SpokenRequest.swift "$@" -o "$OUT/$name" > "$OUT/$name.build.log" 2>&1; then
     cat "$OUT/$name.build.log"; return 1
   fi
   "$OUT/$name" > "$OUT/$name.test.log" 2>&1 || { cat "$OUT/$name.test.log"; return 1; }
@@ -35,6 +35,11 @@ build_ios() {
   grep -F '** BUILD SUCCEEDED **' "$OUT/$label.log" || return 1
 }
 if [[ "$(uname -s)" == Darwin ]]; then build_ios Debug 'iOS Simulator' debug-before-tests; fi
+run_check spoken-request Tests/SpokenRequestChecks.swift
+run_check mail-command MyApp/MailCommand.swift Tests/MailCommandChecks.swift
+if [[ "$(uname -s)" == Darwin ]]; then
+  run_check yahoo-mail MyApp/MailCommand.swift MyApp/YahooIMAP.swift MyApp/YahooMessage.swift Tests/YahooChecks.swift
+fi
 run_check reconnection MyApp/ReconnectionPolicy.swift Tests/ReconnectionPolicyChecks.swift
 run_check youtube-music MyApp/YouTubeMusic.swift Tests/YouTubeMusicChecks.swift
 run_check pronunciation MyApp/AudioTestPronunciation.swift Tests/AudioTestPronunciationChecks.swift

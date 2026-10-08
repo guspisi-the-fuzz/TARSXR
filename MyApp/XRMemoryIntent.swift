@@ -17,11 +17,7 @@ enum XRMemoryIntent: Equatable {
     case ordinary
 
     nonisolated private static func commandText(_ raw: String) -> String {
-        let text = raw.precomposedStringWithCanonicalMapping
-            .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-            .joined(separator: " ")
-        return text.replacingOccurrences(of: #"(?i)^(?:por favor|please)[\s,:]+"#,
-                                        with: "", options: .regularExpression)
+        return SpokenRequest.clean(raw)
     }
 
     nonisolated private static func captures(_ pattern: String, in input: String) -> [String]? {
@@ -41,7 +37,7 @@ enum XRMemoryIntent: Equatable {
     nonisolated static func isQuestionLike(_ raw: String) -> Bool {
         let text = commandText(raw).trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasSuffix("?") { return true }
-        return captures(#"(?i)(?:^|[.!?]\s*)(?:quem|qual|quais|quando|onde|como|por\s+que|porque|o\s+que|who|what|when|where|how|why)\b"#, in: text) != nil
+        return captures(#"(?i)(?:^|[.!?]\s*)(?:que\s+(?:dia|data|horas)|quem|qual|quais|quando|onde|como|por\s+que|porque|o\s+que|who|what|when|where|how|why)\b"#, in: text) != nil
     }
 
     nonisolated private static func directive(_ raw: String) -> (content: String, correction: Bool)? {
@@ -411,6 +407,10 @@ enum XRMemoryIntent: Equatable {
             let key = XRPersistentMemory.key(subject)
             guard XRPersistentMemory.validSubject(subject), !["tudo", "tudo sobre", "all", "everything"].contains(key) else { return .help }
             return .forget(subject)
+        }
+        // ASR often omits punctuation in a direct birthday question.
+        if captures(#"^(?:que\s+(?:dia|data)\s+(?:(?:é|e)\s+)?(?:o\s+)?|quando\s+(?:(?:é|e)\s+)?(?:o\s+)?)meu\s+anivers[aá]rio[.!?]*$"#, in: text) != nil {
+            return .recall("meu aniversário", explicit: true)
         }
         // Remove a discourse 'e/and' only from read-only questions, never to authorize writes.
         let question = text.replacingOccurrences(of: #"(?i)^(?:e|and)[\s,]+"#, with: "", options: .regularExpression)

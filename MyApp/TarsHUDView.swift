@@ -3,6 +3,7 @@ import PhotosUI
 import ImageIO
 import AVFoundation
 import WebKit
+import AVKit
 
 struct TarsHUDView: View {
     @StateObject var model: TarsHUDViewModel
@@ -26,11 +27,19 @@ struct TarsHUDView: View {
     }
     @StateObject private var audio = XRAudioController()
     @StateObject private var music = YouTubeMusicPlayer()
+    @StateObject private var yahoo = YahooAccess()
+    @StateObject private var outputRoute = BluetoothManager()
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
+                HStack {
+                    Text("Saída: \(outputRoute.isConnected ? outputRoute.deviceName : outputRoute.currentRoute?.outputs.first?.portName ?? "iPhone")")
+                        .font(.caption).lineLimit(1)
+                    AudioRoutePicker().frame(width: 36, height: 30)
+                }.padding(.horizontal, 12)
+
                 if music.track != nil {
                     YouTubeMusicView(player: music).frame(height: 230)
                         .onAppear { music.visible = true }
@@ -76,6 +85,7 @@ struct TarsHUDView: View {
             .foregroundStyle(.green)
             .fontDesign(.monospaced)
         }
+        .sheet(isPresented: $yahoo.showsSetup) { YahooSetupView(access: yahoo) }
         #if DEBUG
         .sheet(isPresented: $showsVision) { VisionTestPanel(model: model, audio: audio) }
         #endif
@@ -86,6 +96,11 @@ struct TarsHUDView: View {
         #endif
         .task {
             #if DEBUG
+            if ProcessInfo.processInfo.environment["TARS_YAHOO_PROBE"] == "1" {
+                let result = await yahoo.runDeviceCheck()
+                try? result.write(to: URL.documentsDirectory.appendingPathComponent("yahoo-probe-result.txt"), atomically: true, encoding: .utf8)
+                return
+            }
             if ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] == "1" {
                 let data = VisionTestPanel.fixture().pngData()
                 try? data?.write(to: URL.documentsDirectory.appendingPathComponent("vision-fixture.png"), options: .atomic)
@@ -179,11 +194,15 @@ struct TarsHUDView: View {
             audio.mediaInterruptionPhrase = { text in MusicInterruption.phrase(in: text, mediaActive: music.track != nil) }
             audio.acceptsMediaSpeech = { text in MusicSpeechPolicy.accepts(text, musicActive: music.track != nil) }
             audio.keepsMediaSessionActive = { music.track != nil }
-            audio.handlesLocally = { text in music.command(for: text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
+            audio.handlesLocally = { text in music.command(for: text) != nil || MailCommand.parse(text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
             audio.respond = { text, language in
+                if let command = MailCommand.parse(text) { return await yahoo.handle(command) }
                 if let command = music.command(for: text) { return await music.handle(command) }
                 if let camera = VoiceCameraCommand.parse(text) {
                     return try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
+                }
+                if SpokenRequest.isServiceQuery(text) {
+                    return try await model.converse(text: text, language: language)
                 }
                 if let external = ExternalAccessCommand.parse(text) {
                     return await ExternalAccessAction.perform(command: external)
@@ -668,3 +687,14 @@ private struct VisionTestPanel: View {
     }
 }
 #endif
+
+/// Uses the system output selector; connecting Bluetooth stays under iOS control.
+struct AudioRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = AVRoutePickerView()
+        picker.tintColor = .systemGreen
+        picker.activeTintColor = .systemCyan
+        return picker
+    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
