@@ -24,11 +24,18 @@ struct TarsHUDView: View {
         #endif
     }
     @StateObject private var audio = XRAudioController()
+    @StateObject private var music = YouTubeMusicPlayer()
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
+                if music.track != nil {
+                    YouTubeMusicView(player: music).frame(height: 230)
+                        .onAppear { music.visible = true }
+                        .onDisappear { music.visible = false; music.pauseForBackground() }
+                    Text(music.status).font(.caption).lineLimit(2)
+                }
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
                 #if DEBUG
@@ -94,11 +101,76 @@ struct TarsHUDView: View {
                 return
             }
             #endif
+            #if DEBUG
+            if let query = ProcessInfo.processInfo.environment["TARS_YOUTUBE_PROBE"] {
+                var result = await music.handle(.play(query))
+                if result.isEmpty && music.isPlaying && ProcessInfo.processInfo.environment["TARS_YOUTUBE_CAPTURE_PROBE"] == "1" {
+                    // Exercise the real local speech-recognition microphone path, without
+                    // sending captured speech to Core or generating audible responses.
+                    audio.keepsMediaSessionActive = { music.track != nil }
+                    music.onMediaSessionConfirmed = { audio.resumeAfterMediaSession() }
+                    audio.mediaInterruptionPhrase = { text in MusicInterruption.phrase(in: text, mediaActive: music.track != nil) }
+                    audio.acceptsMediaSpeech = { MusicCommand.parse($0, mediaActive: true) != nil }
+                    audio.respond = { text, _ in
+                        guard let command = music.command(for: text) else { return "" }
+                        return await music.handle(command)
+                    }
+                    await audio.enableHandsFree()
+                    var observations: [String] = []
+                    @MainActor func listening(_ label: String, playing: Bool) async -> Bool {
+                        for _ in 0..<40 {
+                            if audio.handsFree && audio.state == "LISTENING" && music.isPlaying == playing {
+                                observations.append("\(label): listening=true, playing=\(playing)")
+                                return true
+                            }
+                            try? await Task.sleep(for: .milliseconds(200))
+                        }
+                        observations.append("\(label): handsFree=\(audio.handsFree), state=\(audio.state), status=\(audio.status), playing=\(music.isPlaying)")
+                        return false
+                    }
+                    var stable = true
+                    for cycle in 0..<4 {
+                        try? await Task.sleep(for: .seconds(3))
+                        let ok = await listening("cycle \(cycle)", playing: true)
+                        stable = stable && ok
+                        audio.cancel(message: "Teste de coexistência \(cycle)")
+                    }
+                    let ready = await listening("before pause", playing: true)
+                    audio.submitMusicProbeSpeech("TARS, pause the music")
+                    try? await Task.sleep(for: .seconds(3))
+                    let pauseOK = await listening("after pause", playing: false)
+                    audio.submitMusicProbeSpeech("TARS, continua com a música")
+                    try? await Task.sleep(for: .seconds(3))
+                    let resumeOK = await listening("after resume", playing: true)
+                    stable = stable && ready && pauseOK && resumeOK
+                    audio.suspendHandsFree()
+                    _ = await music.handle(.stop)
+                    result = (stable ? "PASS: music + listening, microphone restarts, routed pause and resume" : "FAIL: music/listening stability") + "\n" + observations.joined(separator: "\n")
+                } else if result.isEmpty && music.isPlaying {
+                    try? await Task.sleep(for: .seconds(3))
+                    let paused = await music.handle(.pause)
+                    let pauseOK = !music.isPlaying && paused.isEmpty
+                    let resumed = await music.handle(.resume)
+                    let resumeOK = music.isPlaying && resumed.isEmpty
+                    try? await Task.sleep(for: .seconds(3))
+                    _ = await music.handle(.stop)
+                    result = pauseOK && resumeOK && music.track == nil ? "PASS: YouTube search, autoplay, pause, resume, stop" : "FAIL: pause=\(pauseOK) [\(paused)], resume=\(resumeOK) [\(resumed)], stopped=\(music.track == nil)"
+                }
+                try? result.write(to: URL.documentsDirectory.appendingPathComponent("music-probe-result.txt"), atomically: true, encoding: .utf8)
+                return
+            }
+            #endif
             audio.streamConversation = { text, receive, receiveText in try await model.streamConversation(text: text, receive: receive, receiveText: receiveText) }
             audio.streamSpeech = { text, receive in try await model.streamSpeech(text: text, receive: receive) }
             audio.synthesize = { text in try await model.synthesize(text: text) }
             audio.transcribe = { data in try await model.transcribe(data: data) }
+            music.onMediaSessionConfirmed = { audio.resumeAfterMediaSession() }
+            audio.mediaInterruptionPhrase = { text in MusicInterruption.phrase(in: text, mediaActive: music.track != nil) }
+            audio.acceptsMediaSpeech = { text in MusicSpeechPolicy.accepts(text, musicActive: music.track != nil) }
+            audio.keepsMediaSessionActive = { music.track != nil }
+            audio.handlesLocally = { text in music.command(for: text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
             audio.respond = { text, language in
+                if let command = music.command(for: text) { return await music.handle(command) }
                 if let camera = VoiceCameraCommand.parse(text) {
                     return try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
                 }
@@ -117,10 +189,11 @@ struct TarsHUDView: View {
             await model.run()
         }
         .task(id: scenePhase) {
-            guard !showsVision, !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
+            guard ProcessInfo.processInfo.environment["TARS_YOUTUBE_PROBE"] == nil, !showsVision, !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
             if scenePhase == .active {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
+                music.pauseForBackground()
                 audio.suspendHandsFree()
             }
         }

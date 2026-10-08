@@ -36,6 +36,7 @@ build_ios() {
 }
 if [[ "$(uname -s)" == Darwin ]]; then build_ios Debug 'iOS Simulator' debug-before-tests; fi
 run_check reconnection MyApp/ReconnectionPolicy.swift Tests/ReconnectionPolicyChecks.swift
+run_check youtube-music MyApp/YouTubeMusic.swift Tests/YouTubeMusicChecks.swift
 run_check pronunciation MyApp/AudioTestPronunciation.swift Tests/AudioTestPronunciationChecks.swift
 run_check voice MyApp/VoiceActivationPolicy.swift Tests/VoiceActivationChecks.swift
 run_check device-clock MyApp/XRDeviceClock.swift Tests/XRDeviceClockChecks.swift

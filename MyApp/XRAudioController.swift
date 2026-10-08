@@ -61,6 +61,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var recognition: SFSpeechRecognitionTask?
     private var timeout: Task<Void, Never>?
     private var conversationTask: Task<Void, Never>?
+    var mediaInterruptionPhrase: ((String) -> String?)?
+    var acceptsMediaSpeech: ((String) -> Bool)?
+    var keepsMediaSessionActive: (() -> Bool)?
+    var handlesLocally: ((String) -> Bool)?
     var respond: ((String, String) async throws -> String)?
     var wakeRespond: ((String, String) async throws -> String)?
     var visualRespond: ((String) async throws -> String)?
@@ -72,7 +76,7 @@ private let bluetooth = BluetoothManager()
     private var captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
     private var utterance: AVSpeechUtterance?
     private var interruption: NSObjectProtocol?
-    private var handsFree = false
+    private(set) var handsFree = false
     private var voiceServiceBlocked = false
     private var resumeAfterInterruption = false
     private var voicePolicy = VoiceActivationPolicy()
@@ -136,10 +140,23 @@ private let bluetooth = BluetoothManager()
     }
 
     func suspendHandsFree() {
+        resumeAfterInterruption = false
         handsFree = false
         restartTask?.cancel(); restartTask = nil
         voicePolicy.reset()
         cancel(message: "Escuta pausada fora do app ou durante interrupção.")
+    }
+
+    /// WebKit may interrupt native capture without an end notification. Only
+    /// recover when the visible player confirms a playing or paused session.
+    /// A paused song must retain microphone access to hear the resume command.
+    func resumeAfterMediaSession() {
+        guard resumeAfterInterruption, !handsFree,
+              keepsMediaSessionActive?() == true, !voiceServiceBlocked,
+              UIApplication.shared.applicationState == .active else { return }
+        resumeAfterInterruption = false
+        handsFree = true
+        scheduleListening()
     }
 
     private func scheduleListening() {
@@ -166,11 +183,15 @@ private let bluetooth = BluetoothManager()
                   let self else { return }
             Task { @MainActor in
                 if value == AVAudioSession.InterruptionType.began.rawValue {
-                    self.resumeAfterInterruption = self.handsFree
-                    self.suspendHandsFree()
+                    self.resumeAfterInterruption = self.resumeAfterInterruption || self.handsFree
+                    self.handsFree = false
+                    self.restartTask?.cancel(); self.restartTask = nil
+                    self.cancel(message: "Escuta interrompida pelo sistema de áudio.")
+                    self.writeVoiceDiagnostic(failedStage: "AUDIO_INTERRUPTION")
                 } else if self.resumeAfterInterruption && UIApplication.shared.applicationState == .active {
                     self.resumeAfterInterruption = false
-                    await self.enableHandsFree()
+                    self.handsFree = true
+                    self.scheduleListening()
                 }
             }
         }
@@ -231,7 +252,10 @@ private let bluetooth = BluetoothManager()
         }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            let captureOptions: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
+            if session.category != .playAndRecord || session.mode != .default || session.categoryOptions != captureOptions {
+                try session.setCategory(.playAndRecord, mode: .default, options: captureOptions)
+            }
             try session.setActive(true)
             inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
             let input = engine.inputNode
@@ -242,7 +266,7 @@ private let bluetooth = BluetoothManager()
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.shouldReportPartialResults = true
             req.requiresOnDeviceRecognition = handsFree
-            req.contextualStrings = ["TARS"]
+            req.contextualStrings = ["TARS", "TARS pause", "TARS pausa", "TARS pare a música", "TARS stop", "TARS continua com a música", "TARS play the music", "TARS pause the music"]
             request = req
             transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -266,7 +290,14 @@ private let bluetooth = BluetoothManager()
                 let failureCode = (error as NSError?).map { "\($0.domain)/\($0.code)" }
                 Task { @MainActor in
                     guard let self, self.generation == id, self.state == "LISTENING" else { return }
-                    if let text { self.transcript = text }
+                    if let text {
+                        self.transcript = text
+                        if let command = self.mediaInterruptionPhrase?(text) {
+                            self.transcript = command
+                            self.finish()
+                            return
+                        }
+                    }
                     if final { self.finish() }
                     else if let failureCode {
                         // Initialization failure is not recovered by repeating the same request.
@@ -322,7 +353,10 @@ private let bluetooth = BluetoothManager()
         #endif
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            let captureOptions: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
+            if session.category != .playAndRecord || session.mode != .default || session.categoryOptions != captureOptions {
+                try session.setCategory(.playAndRecord, mode: .default, options: captureOptions)
+            }
             try session.setActive(true)
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("tars-\(UUID().uuidString).wav")
             recordingURL = url
@@ -429,7 +463,7 @@ private let bluetooth = BluetoothManager()
                 #if DEBUG
                 let answerStarted = ProcessInfo.processInfo.systemUptime
                 #endif
-                if self.visualRespond == nil, self.pipelinedConversation, let streamConversation = self.streamConversation {
+                if self.visualRespond == nil, self.handlesLocally?(request) != true, self.pipelinedConversation, let streamConversation = self.streamConversation {
                     self.speakStreamed(request, isConversation: true) { [weak self] question, receive in
                         var display = ""
                         try await streamConversation(question, receive) { part in
@@ -447,7 +481,7 @@ private let bluetooth = BluetoothManager()
                 #if DEBUG
                 self.recordLatency("answer_seconds", since: answerStarted)
                 #endif
-                self.speak(answer)
+                if answer.isEmpty { self.completedSpeech() } else { self.speak(answer) }
             } catch {
                 guard !Task.isCancelled, self.generation == id else { return }
                 self.failService(error)
@@ -505,7 +539,7 @@ private let bluetooth = BluetoothManager()
                     #if DEBUG
                     self.recordLatency("answer_seconds", since: answerStarted)
                     #endif
-                    self.speak(answer)
+                    if answer.isEmpty { self.completedSpeech() } else { self.speak(answer) }
                 } catch {
                     guard !Task.isCancelled, self.generation == id else { return }
                     self.failService(error)
@@ -536,6 +570,11 @@ private let bluetooth = BluetoothManager()
             transcript = question
             voiceProgress = "Pergunta sobre a foto reconhecida; preparando resposta."
             return question
+        }
+        if acceptsMediaSpeech?(text) == false {
+            transcript = ""
+            cancel(message: "Música tocando. Diga TARS antes de conversar.")
+            return nil
         }
         switch voicePolicy.consume(text, now: capturedAt) {
         case .continueListening:
@@ -642,7 +681,7 @@ private let bluetooth = BluetoothManager()
                 let data = try await synthesize(text)
                 guard !Task.isCancelled, self.generation == id else { return }
                 let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .spokenAudio)
+                try configureVoiceOutputSession(keepingMedia: self.keepsMediaSessionActive?() == true)
                 try session.setActive(true)
                 let player = try AVAudioPlayer(data: data)
                 guard player.duration > 0, player.duration <= 90 else { throw TARSClientError.unavailable }
@@ -680,7 +719,7 @@ private let bluetooth = BluetoothManager()
             guard let self, !Task.isCancelled, self.generation == id else { return }
             let started = ProcessInfo.processInfo.systemUptime
             do {
-                let player = try BufferedVoicePlayer()
+                let player = try BufferedVoicePlayer(keepingMedia: self.keepsMediaSessionActive?() == true)
                 self.streamedPlayer = player
                 player.onStart = { [weak self] in
                     guard let self, self.generation == id else { return }
@@ -738,7 +777,7 @@ private let bluetooth = BluetoothManager()
         #endif
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio)
+            try configureVoiceOutputSession(keepingMedia: self.keepsMediaSessionActive?() == true)
             try session.setActive(true)
             let speech = AVSpeechUtterance(string: text)
             let detected = NLLanguageRecognizer.dominantLanguage(for: text)?.rawValue ?? language
@@ -771,7 +810,9 @@ private let bluetooth = BluetoothManager()
         stopCapture(); utterance = nil
         speaker.stopSpeaking(at: .immediate)
         state = "IDLE"; status = "IDLE"; self.message = message
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if keepsMediaSessionActive?() != true {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         scheduleListening()
     }
 
@@ -855,6 +896,13 @@ private let bluetooth = BluetoothManager()
 
 #if DEBUG
 extension XRAudioController {
+    /// Exercise production routing with a known transcript while real capture is active.
+    func submitMusicProbeSpeech(_ text: String) {
+        guard state == "LISTENING" else { return }
+        transcript = text
+        finish()
+    }
+
     /// Bounded local-only probe; records capability/error metadata, never speech text.
     static func runLocalRecognitionProbe() async -> String {
         var lines: [String] = []
@@ -1183,9 +1231,9 @@ private final class BufferedVoicePlayer {
     var onStart: (() -> Void)?
     var onFinish: (() -> Void)?
 
-    init() throws {
+    init(keepingMedia: Bool = false) throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
+        try configureVoiceOutputSession(keepingMedia: keepingMedia)
         try session.setActive(true)
         engine.attach(node); engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.prepare(); try engine.start()
@@ -1238,5 +1286,19 @@ private final class BufferedVoicePlayer {
         guard !stopped else { return }
         stopped = true; onStart = nil; onFinish = nil
         node.stop(); engine.stop(); queuedFrames = 0
+    }
+}
+
+/// Keep the microphone/music route stable when TARS speaks over an open player.
+@MainActor
+private func configureVoiceOutputSession(keepingMedia: Bool) throws {
+    let session = AVAudioSession.sharedInstance()
+    if keepingMedia {
+        let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
+        if session.category != .playAndRecord || session.mode != .default || session.categoryOptions != options {
+            try session.setCategory(.playAndRecord, mode: .default, options: options)
+        }
+    } else {
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
     }
 }
