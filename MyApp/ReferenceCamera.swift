@@ -379,6 +379,226 @@ final class VoiceStillCamera: NSObject, AVCapturePhotoCaptureDelegate {
 }
 
 
+// MARK: - External app access by voice
+
+struct ExternalAccessCommand: Equatable {
+    enum Destination: String, Equatable {
+        case safari
+        case deezer
+        case youtube
+        case gmail
+        case yahooMail
+        case weather
+        case stocks
+    }
+
+    let destination: Destination
+    let query: String?
+
+    static func parse(_ raw: String) -> ExternalAccessCommand? {
+        let text = normalize(raw)
+        guard !text.isEmpty, hasAccessIntent(text) else { return nil }
+
+        if text.contains("deezer") {
+            return ExternalAccessCommand(destination: .deezer, query: query(from: text, destination: .deezer))
+        }
+        if text.contains("youtube") || text.contains("you tube") || text.contains("yt") {
+            return ExternalAccessCommand(destination: .youtube, query: query(from: text, destination: .youtube))
+        }
+        if text.contains("gmail") || text.contains("google mail") {
+            return ExternalAccessCommand(destination: .gmail, query: nil)
+        }
+        if text.contains("yahoo mail") || text.contains("yahoo email") || (text.contains("yahoo") && text.contains("mail")) {
+            return ExternalAccessCommand(destination: .yahooMail, query: nil)
+        }
+        if text.contains("tempo") || text.contains("clima") || text.contains("weather") {
+            return ExternalAccessCommand(destination: .weather, query: nil)
+        }
+        if text.contains("stocks") || text.contains("bolsa") || text.contains("acoes") || text.contains("acao") || text.contains("finance") {
+            return ExternalAccessCommand(destination: .stocks, query: nil)
+        }
+        if text.contains("safari") || text.contains("google") || isGenericSearch(text) {
+            return ExternalAccessCommand(destination: .safari, query: query(from: text, destination: .safari))
+        }
+
+        return nil
+    }
+
+    var spokenConfirmation: String {
+        switch destination {
+        case .safari:
+            if let query { return "Abrindo Safari com busca por \(query)." }
+            return "Abrindo Safari."
+        case .deezer:
+            if let query { return "Abrindo Deezer com busca por \(query)." }
+            return "Abrindo Deezer."
+        case .youtube:
+            if let query { return "Abrindo YouTube com busca por \(query)." }
+            return "Abrindo YouTube."
+        case .gmail:
+            return "Abrindo Gmail."
+        case .yahooMail:
+            return "Abrindo Yahoo Mail."
+        case .weather:
+            return "Abrindo Tempo."
+        case .stocks:
+            return "Abrindo Bolsa."
+        }
+    }
+
+    var primaryURL: URL {
+        switch destination {
+        case .safari:
+            return Self.searchURL(query) ?? URL(string: "https://www.google.com")!
+        case .deezer:
+            if let query { return URL(string: "https://www.deezer.com/search/\(Self.path(query))")! }
+            return URL(string: "https://www.deezer.com")!
+        case .youtube:
+            if let query { return URL(string: "https://www.youtube.com/results?search_query=\(Self.query(query))")! }
+            return URL(string: "https://www.youtube.com")!
+        case .gmail:
+            return URL(string: "googlegmail://")!
+        case .yahooMail:
+            return URL(string: "ymail://")!
+        case .weather:
+            return URL(string: "weather://")!
+        case .stocks:
+            return URL(string: "stocks://")!
+        }
+    }
+
+    var fallbackURL: URL? {
+        switch destination {
+        case .safari:
+            return query.flatMap { Self.searchURL($0) } ?? URL(string: "https://www.google.com")
+        case .deezer:
+            if let query { return URL(string: "https://www.deezer.com/search/\(Self.path(query))") }
+            return URL(string: "https://www.deezer.com")
+        case .youtube:
+            if let query { return URL(string: "https://www.youtube.com/results?search_query=\(Self.query(query))") }
+            return URL(string: "https://www.youtube.com")
+        case .gmail:
+            return URL(string: "https://mail.google.com/mail/")
+        case .yahooMail:
+            return URL(string: "https://mail.yahoo.com/")
+        case .weather:
+            return URL(string: "https://weather.com/weather/today/")
+        case .stocks:
+            return URL(string: "https://finance.yahoo.com/")
+        }
+    }
+
+    private static func searchURL(_ value: String?) -> URL? {
+        guard let value, !value.isEmpty else { return nil }
+        return URL(string: "https://www.google.com/search?q=\(query(value))")
+    }
+
+    private static func hasAccessIntent(_ text: String) -> Bool {
+        [
+            "abre", "abrir", "abra", "vai no", "vai na", "vai ao", "vai a",
+            "va no", "va na", "pesquisa", "pesquisar", "procura", "procurar",
+            "busca", "buscar", "toca", "tocar", "executa", "executar", "coloca"
+        ].contains { text.contains($0) }
+    }
+
+    private static func isGenericSearch(_ text: String) -> Bool {
+        text.hasPrefix("pesquisa ") || text.hasPrefix("procura ") || text.hasPrefix("busca ") ||
+        text.contains(" pesquisa ") || text.contains(" procura ") || text.contains(" busca ")
+    }
+
+    private static func query(from text: String, destination: Destination) -> String? {
+        var q = " " + text + " "
+        let removals = [
+            "tars", "por favor", "por gentileza", "pra mim", "para mim",
+            "vai no", "vai na", "vai ao", "vai a", "va no", "va na",
+            "abre o", "abre a", "abre", "abrir o", "abrir a", "abrir", "abra o", "abra a", "abra",
+            "pesquisa por", "pesquisa", "pesquisar", "procura por", "procura", "procurar", "busca por", "busca", "buscar",
+            "toca", "tocar", "executa", "executar", "coloca", "colocar",
+            "no deezer", "na deezer", "deezer", "no youtube", "na youtube", "youtube", "you tube", "yt",
+            "no safari", "na safari", "safari", "no google", "google",
+            "gmail", "google mail", "yahoo mail", "yahoo email", "yahoo",
+            "tempo", "clima", "weather", "stocks", "bolsa", "acoes", "acao", "finance",
+            "e ve se la tem", "ve se la tem", "se la tem", "la tem", "aquela musica do", "aquela musica", "musica do", "musica",
+            "se tiver", "ai", "porra"
+        ]
+        for token in removals {
+            q = q.replacingOccurrences(of: " " + token + " ", with: " ")
+        }
+        let collapsed = q.split(separator: " ").joined(separator: " ")
+        guard collapsed.count >= 2 else { return nil }
+        switch destination {
+        case .gmail, .yahooMail, .weather, .stocks:
+            return nil
+        default:
+            return collapsed
+        }
+    }
+
+    private static func normalize(_ raw: String) -> String {
+        raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "pt_BR"))
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func query(_ raw: String) -> String {
+        raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? raw
+    }
+
+    private static func path(_ raw: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#[]@!$&'()*+,;=")
+        return raw.addingPercentEncoding(withAllowedCharacters: allowed) ?? raw
+    }
+}
+
+@MainActor
+enum ExternalAccessAction {
+    static func perform(command: ExternalAccessCommand) async -> String {
+        let message = command.spokenConfirmation
+        let primary = command.primaryURL
+        let fallback = command.fallbackURL
+        Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
+            let opened = await open(primary)
+            if !opened, let fallback { _ = await open(fallback) }
+        }
+        return message
+    }
+
+    private static func open(_ url: URL) async -> Bool {
+        await withCheckedContinuation { continuation in
+            UIApplication.shared.open(url, options: [:]) { success in
+                continuation.resume(returning: success)
+            }
+        }
+    }
+}
+
+#if DEBUG
+@MainActor
+enum ExternalAccessChecks {
+    static func run() throws {
+        func check(_ value: Bool, _ message: String) throws {
+            if !value { throw NSError(domain: message, code: 1) }
+        }
+        try check(ExternalAccessCommand.parse("TARS, abre o Safari")?.destination == .safari, "Safari command not detected")
+        try check(ExternalAccessCommand.parse("TARS, pesquisa Palmeiras hoje")?.destination == .safari, "Generic Safari search not detected")
+        try check(ExternalAccessCommand.parse("TARS, abre o Deezer")?.destination == .deezer, "Deezer command not detected")
+        let deezer = ExternalAccessCommand.parse("TARS, vai no Deezer e vê se lá tem aquela música do Toots and the Maytals, 54-46. Se tiver, por favor executa, em versão ao vivo")
+        try check(deezer?.destination == .deezer && (deezer?.query ?? "").contains("toots"), "Deezer search query not extracted")
+        try check(ExternalAccessCommand.parse("TARS, procura no YouTube Toots and the Maytals 54-46 live")?.destination == .youtube, "YouTube search not detected")
+        try check(ExternalAccessCommand.parse("TARS, abre o Gmail")?.destination == .gmail, "Gmail command not detected")
+        try check(ExternalAccessCommand.parse("TARS, abre o Yahoo Mail")?.destination == .yahooMail, "Yahoo Mail command not detected")
+        try check(ExternalAccessCommand.parse("TARS, abre o tempo")?.destination == .weather, "Weather command not detected")
+        try check(ExternalAccessCommand.parse("TARS, abre Stocks")?.destination == .stocks, "Stocks command not detected")
+        try check(ExternalAccessCommand.parse("me conta uma piada") == nil, "Ordinary conversation routed to app access")
+    }
+}
+#endif
+
+
 
 #if DEBUG
 @MainActor
@@ -437,6 +657,7 @@ enum VoiceCameraCommandChecks {
         try check(VoiceCameraCommand.parse("TARS, tira foto")?.kind == .photo, "Voice camera short photo command not detected")
         try check(VoiceCameraCommand.parse("TARS, tira uma selfie")?.position == .front, "Voice camera selfie must use front camera")
         try check(VoiceCameraCommand.parse("me conta uma piada") == nil, "Non-camera command routed to camera")
+        try ExternalAccessChecks.run()
     }
 }
 

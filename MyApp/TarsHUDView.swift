@@ -102,6 +102,9 @@ struct TarsHUDView: View {
                 if let camera = VoiceCameraCommand.parse(text) {
                     return try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
                 }
+                if let external = ExternalAccessCommand.parse(text) {
+                    return await ExternalAccessAction.perform(command: external)
+                }
                 return try await model.converse(text: text, language: language)
             }
             audio.wakeRespond = { text, language in
