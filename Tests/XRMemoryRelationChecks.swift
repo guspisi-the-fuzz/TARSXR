@@ -116,6 +116,31 @@ struct XRMemoryRelationChecks {
             check(base.selected.count == 1 && base.selected[0]["statement"] as? String == fact.1, "same relevant fact enters conversation")
             check(try Data(contentsOf: path) == bytes, "legacy source unchanged")
         }
+        // Explicit memory recall must be local and deterministic, not logicalRecall/model prose.
+        let deterministicPath = freshPath("deterministic-recall")
+        let deterministicStore = XRPersistentMemory(url: deterministicPath)
+        _ = try deterministicStore.save(subject: "minha mãe", statement: "Minha mãe se chama Anete", correction: false)
+        _ = try deterministicStore.save(subject: "a Mel", statement: "A Mel é uma gata que mora comigo e com a Daniela", correction: false)
+        let deterministicBase = RelationFixtureRuntime()
+        let deterministicRT = MemoryTARSRuntime(
+            underlying: deterministicBase,
+            memory: { deterministicStore },
+            logicalRecall: { _, _ in "Pelos fatos registrados, Mel." }
+        )
+        let mother = try await deterministicRT.converse(text: "Qual é o nome da minha mãe?", language: "pt-BR", context: nil)
+        check(mother == "Sua mãe se chama Anete.", "explicit mother recall answered locally, no duplicate logical answer")
+        let daniela = try await deterministicRT.converse(text: "O que você lembra sobre a Daniela?", language: "pt-BR", context: nil)
+        check(daniela.hasPrefix("Não tenho"), "explicit Daniela recall does not reuse Mel fact")
+        check(deterministicBase.calls == 0, "explicit memory recall never delegated to model/logicalRecall")
+
+        let deicticPath = freshPath("deictic-without-pending")
+        let deicticStore = XRPersistentMemory(url: deicticPath)
+        let deicticBase = RelationFixtureRuntime()
+        let deicticRT = MemoryTARSRuntime(underlying: deicticBase, memory: { deicticStore })
+        let deictic = try await deicticRT.converse(text: "Guarda isso.", language: "pt-BR", context: nil)
+        check(deictic == "Não há nenhuma gravação de memória aguardando confirmação.", "deictic save without pending fact cannot claim success")
+        check(try deicticStore.load().facts.isEmpty && deicticBase.calls == 0, "deictic save without pending writes nothing and calls no model")
+
 // TARS_MEMORY_MANAGER_08_V4: restart pending confirmation is covered by XRMemoryPending08Checks.
         // Single-use authorization for a fact in the next user turn, never indefinitely.
         let pendingPath = freshPath("pending"); let pendingStore = XRPersistentMemory(url: pendingPath)

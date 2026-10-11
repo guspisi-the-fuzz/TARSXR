@@ -134,7 +134,10 @@ final class MemoryTARSRuntime: TARSRuntime {
         if !internalWake, !SpokenRequest.isServiceQuery(text), pendingState.fact == nil, pendingState.suggestion == nil, let logicalRecall {
             let eligible: Bool
             switch XRMemoryIntent.parse(text) {
-            case .recall, .recallAttribute: eligible = true
+            // Explicit memory reads are deterministic and must be answered by the
+            // local XR store first. The model/logical recall can mix nearby facts
+            // and produce wrong associations like answering Daniela with Mel.
+            case .recall, .recallAttribute: eligible = false
             case .ordinary: eligible = XRMemoryIntent.isQuestionLike(text)
             default: eligible = false
             }
@@ -271,6 +274,12 @@ final class MemoryTARSRuntime: TARSRuntime {
         // A standalone confirmation without a pending candidate is local state, not a
         // question for the model. Never let the model reply “você quer o quê?”.
         if !internalWake && (XRMemoryIntent.confirmsSuggestion(text) || XRMemoryIntent.rejectsSuggestion(text)) {
+            traceMemory("confirmation_without_pending")
+            invalidateConversation()
+            return english ? "There is no memory save waiting for confirmation."
+                : "Não há nenhuma gravação de memória aguardando confirmação."
+        }
+        if !internalWake && pendingState.fact == nil && localConfirmsPendingSuggestion(text) {
             traceMemory("confirmation_without_pending")
             invalidateConversation()
             return english ? "There is no memory save waiting for confirmation."
