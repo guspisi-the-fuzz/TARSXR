@@ -53,6 +53,10 @@ struct XRMemorySpeechIntentChecks {
         check(XRMemoryIntent.parse("Please, remember that Mel is my cat.") == .save(subject: "Mel", statement: "Mel is my cat", correction: false), "English polite save")
         check(XRMemoryIntent.parse("Please save in your memory that Mel is my cat, please.") == .save(subject: "Mel", statement: "Mel is my cat", correction: false), "English memory target")
         check(XRMemoryIntent.parse("Você pode corrigir que a Mel é minha cachorra?") == .save(subject: "a Mel", statement: "a Mel é minha cachorra", correction: true), "explicit correction still required")
+        check(XRMemoryIntent.parse("A Mel é minha gata, guarde isso.") == .save(subject: "A Mel", statement: "A Mel é minha gata", correction: false), "trailing deictic save")
+        check(XRMemoryIntent.parse("Minha mãe se chama Anete, salva essa informação.") == .save(subject: "Minha mãe", statement: "Minha mãe se chama Anete", correction: false), "trailing save named relation")
+        check(XRMemoryIntent.parse("O nome da minha mãe chama-se Anete. grava na memória do aparelho.") == .save(subject: "minha mãe", statement: "O nome da minha mãe chama-se Anete", correction: false), "trailing save to device memory")
+        check(XRMemoryIntent.parse("A Mel é minha cachorra, corrige isso.") == .save(subject: "A Mel", statement: "A Mel é minha cachorra", correction: true), "trailing deictic correction")
         check(XRMemoryIntent.english("Please, remember Mel is my cat"), "English local acknowledgement")
         check(!XRMemoryIntent.english("Por favor, guarde que a Mel é minha gata"), "Portuguese local acknowledgement")
 

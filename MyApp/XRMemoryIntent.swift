@@ -66,6 +66,31 @@ enum XRMemoryIntent: Equatable {
         return request.correction
     }
 
+    /// Natural speech often puts the durable-memory command after the fact:
+    /// "A Mel é minha gata, guarda isso" / "Minha mãe se chama Anete, salva na memória".
+    /// This is still explicit, but the fact comes before the command.
+    nonisolated private static func trailingDirective(_ raw: String) -> (content: String, correction: Bool)? {
+        guard raw.utf8.count <= 4096 else { return nil }
+        var text = trimEnd(commandText(raw))
+        guard !text.isEmpty else { return nil }
+
+        let correctionPattern = #"(?i)[\s,.;:]+(?:por\s+favor\s+)?(?:corrija|corrige|corrigir|correct|update)(?:\s+(?:isso|essa|esta|essas|estas)\s+informa[cç](?:[aã]o|[oõ]es)|\s+isso)?(?:\s+(?:(?:no|neste|nesse)\s+xr|(?:na|nesta|nessa)\s+mem[oó]ria(?:\s+(?:(?:(?:do|no|desse|deste|nesse|neste)\s+)?(?:aparelho|dispositivo|iphone|xr)|local|persistente))?|(?:no|neste|nesse)\s+aparelho))?[.!?]*$"#
+        if let range = text.range(of: correctionPattern, options: [.regularExpression, .caseInsensitive]) {
+            text.removeSubrange(range)
+            let content = trimEnd(text)
+            return content.isEmpty ? nil : (content, true)
+        }
+
+        let savePattern = #"(?i)[\s,.;:]+(?:por\s+favor\s+)?(?:salva|salve|guarda|guarde|grava|grave|memoriza|memorize|anota|anote|save|remember)(?:\s+(?:isso|essa|esta|essas|estas)\s+informa[cç](?:[aã]o|[oõ]es)|\s+isso)?(?:\s+(?:(?:no|neste|nesse)\s+xr|(?:na|nesta|nessa)\s+mem[oó]ria(?:\s+(?:(?:(?:do|no|desse|deste|nesse|neste)\s+)?(?:aparelho|dispositivo|iphone|xr)|local|persistente))?|(?:no|neste|nesse)\s+aparelho))?[.!?]*$"#
+        if let range = text.range(of: savePattern, options: [.regularExpression, .caseInsensitive]) {
+            text.removeSubrange(range)
+            let content = trimEnd(text)
+            return content.isEmpty ? nil : (content, false)
+        }
+
+        return nil
+    }
+
     nonisolated private static func nameOwner(_ subject: String) -> String? {
         captures(#"^(?:o\s+)?nome\s+(?:da|do|de)\s+(.+)$"#, in: subject)?.first
             ?? captures(#"^(?:the\s+)?name\s+of\s+(.+)$"#, in: subject)?.first
@@ -401,6 +426,9 @@ enum XRMemoryIntent: Equatable {
         guard raw.utf8.count <= 4096 else { return .help }
         let text = commandText(raw)
         if let request = directive(text) {
+            return fact(request.content, correction: request.correction) ?? .help
+        }
+        if let request = trailingDirective(text) {
             return fact(request.content, correction: request.correction) ?? .help
         }
         if let parts = captures(#"^(?:esqueça|esqueca|esquecer|apague|forget)\s+(?:(?:tudo sobre|everything about|sobre|about)\s+)?(.+?)[.!?]*$"#, in: text) {
