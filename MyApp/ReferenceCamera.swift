@@ -77,6 +77,83 @@ enum ReferencePhoto {
     }
 }
 
+
+struct VoiceSavedPhoto: Equatable {
+    let url: URL
+    let kind: VoiceCameraCommand.Kind
+
+    var spokenConfirmation: String {
+        let label = kind == .selfie ? "Selfie tirada" : "Foto tirada"
+        return "\(label) e salva no XR."
+    }
+}
+
+@MainActor
+enum VoicePhotoStore {
+    static func save(
+        _ input: UIImage,
+        kind: VoiceCameraCommand.Kind,
+        directory: URL? = nil,
+        now: Date = Date()
+    ) throws -> VoiceSavedPhoto {
+        let width = input.size.width, height = input.size.height
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else {
+            throw VoiceCameraError.invalidImage
+        }
+
+        let ratio = min(1, 1600 / max(width, height))
+        let size = CGSize(width: max(1, floor(width * ratio)), height: max(1, floor(height * ratio)))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.preferredRange = .standard
+        format.opaque = true
+
+        let normalized = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            input.draw(in: CGRect(origin: .zero, size: size))
+        }
+
+        guard let data = normalized.jpegData(compressionQuality: 0.92), !data.isEmpty else {
+            throw VoiceCameraError.invalidImage
+        }
+
+        let root = directory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("TARS Photos", isDirectory: true)
+
+        guard let root else { throw VoiceCameraError.saveFailed }
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+
+        let suffix: String
+        switch kind {
+        case .selfie:
+            suffix = "selfie"
+        case .photo:
+            suffix = "photo"
+        case .findMel:
+            suffix = "mel"
+        case .describe:
+            suffix = "vision"
+        }
+
+        let url = root.appendingPathComponent("tars-\(formatter.string(from: now))-\(suffix).jpg")
+        try data.write(to: url, options: [.atomic])
+
+        var resource = URLResourceValues()
+        resource.isExcludedFromBackup = true
+        var mutableURL = url
+        try? mutableURL.setResourceValues(resource)
+
+        return VoiceSavedPhoto(url: url, kind: kind)
+    }
+}
+
 // MARK: - XR_VOICE_CAMERA_28
 
 enum VoiceCameraError: LocalizedError {
@@ -84,6 +161,7 @@ enum VoiceCameraError: LocalizedError {
     case denied
     case invalidImage
     case captureFailed
+    case saveFailed
 
     var errorDescription: String? {
         switch self {
@@ -95,6 +173,8 @@ enum VoiceCameraError: LocalizedError {
             return "Capturei a imagem, mas não consegui prepará-la para análise."
         case .captureFailed:
             return "Não consegui capturar a imagem agora."
+        case .saveFailed:
+            return "Capturei a foto, mas não consegui salvar no XR."
         }
     }
 }
@@ -216,7 +296,8 @@ struct VoiceCameraCommand: Equatable {
             )
         }
 
-        if text.contains("tira uma foto") ||
+        let asksPhotoCapture =
+            text.contains("tira uma foto") ||
             text.contains("tira foto") ||
             text.contains("tirar uma foto") ||
             text.contains("tirar foto") ||
@@ -228,12 +309,26 @@ struct VoiceCameraCommand: Equatable {
             text.contains("capture foto") ||
             text.contains("bate uma foto") ||
             text.contains("bate foto") ||
-            text.contains("fotografa") {
+            text.contains("fotografa")
+
+        if asksPhotoCapture {
+            let usesFrontCamera =
+                text.contains("selfie") ||
+                text.contains("foto nossa") ||
+                text.contains("nossa foto") ||
+                text.contains("foto minha") ||
+                text.contains("minha foto") ||
+                text.contains("eu e ") ||
+                text.contains("comigo") ||
+                (text.contains("minha") && (text.contains("daniela") || text.contains("dani") || text.contains("mel")))
+
             return VoiceCameraCommand(
-                kind: .photo,
-                position: .back,
+                kind: usesFrontCamera ? .selfie : .photo,
+                position: usesFrontCamera ? .front : .back,
                 source: "reference",
-                question: "Foto capturada pela câmera traseira do XR. Descreva rapidamente o conteúdo principal da imagem."
+                question: usesFrontCamera
+                    ? "Foto capturada pela câmera frontal do XR."
+                    : "Foto capturada pela câmera traseira do XR."
             )
         }
 
@@ -256,13 +351,21 @@ struct VoiceCameraCommand: Equatable {
 enum VoiceCameraAction {
     static func captureAndDescribe(command: VoiceCameraCommand, model: TarsHUDViewModel) async throws -> String {
         let image = try await VoiceStillCamera.capture(position: command.position)
-        guard let normalized = ReferencePhoto.normalize(image) else { throw VoiceCameraError.invalidImage }
-        let reply = try await model.describeImage(
-            png: normalized.png,
-            source: command.source,
-            question: command.question
-        )
-        return reply.description
+
+        switch command.kind {
+        case .photo, .selfie:
+            let saved = try VoicePhotoStore.save(image, kind: command.kind)
+            return saved.spokenConfirmation
+
+        case .describe, .findMel:
+            guard let normalized = ReferencePhoto.normalize(image) else { throw VoiceCameraError.invalidImage }
+            let reply = try await model.describeImage(
+                png: normalized.png,
+                source: command.source,
+                question: command.question
+            )
+            return reply.description
+        }
     }
 }
 
@@ -629,6 +732,12 @@ enum ReferenceCameraChecks {
         try check(photo.image.size == CGSize(width: 480, height: 320) && photo.image.imageOrientation == .up, "Photo resolution/orientation")
         try check(ReferencePhoto.normalize(UIImage()) == nil, "Empty photo accepted")
         try photo.png.write(to: URL.documentsDirectory.appendingPathComponent("normalized-camera-check.png"), options: .atomic)
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("tars-photo-check-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let saved = try VoicePhotoStore.save(large, kind: .selfie, directory: temp, now: Date(timeIntervalSince1970: 0))
+        try check(FileManager.default.fileExists(atPath: saved.url.path), "Photo command did not save local file")
+        try check(saved.url.lastPathComponent.hasSuffix("-selfie.jpg"), "Photo command filename kind")
+
         var callbacks = 0
         let coordinator = ReferenceCamera.Coordinator { image in callbacks += 1; assert(image != nil) }
         let picker = UIImagePickerController()
@@ -656,6 +765,10 @@ enum VoiceCameraCommandChecks {
         try check(VoiceCameraCommand.parse("TARS, tire uma foto")?.kind == .photo, "Voice camera photo command not detected")
         try check(VoiceCameraCommand.parse("TARS, tira foto")?.kind == .photo, "Voice camera short photo command not detected")
         try check(VoiceCameraCommand.parse("TARS, tira uma selfie")?.position == .front, "Voice camera selfie must use front camera")
+        try check(VoiceCameraCommand.parse("TARS, tira uma foto nossa")?.position == .front, "Group photo must use front camera")
+        try check(VoiceCameraCommand.parse("TARS, tira uma foto minha e da Daniela")?.position == .front, "Daniela photo with user must use front camera")
+        try check(VoiceCameraCommand.parse("TARS, tira uma foto minha e da Mel")?.position == .front, "Mel photo with user must use front camera")
+        try check(VoiceCameraCommand.parse("TARS, tira uma foto da Mel")?.position == .back, "Photo of Mel alone should use rear camera")
         try check(VoiceCameraCommand.parse("me conta uma piada") == nil, "Non-camera command routed to camera")
         try ExternalAccessChecks.run()
     }
