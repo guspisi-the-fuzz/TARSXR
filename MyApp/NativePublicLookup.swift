@@ -34,6 +34,13 @@ import CoreFoundation
     private func url(_ base:String,_ values:[String:String])->URL { var c=URLComponents(string:base)!;c.queryItems=values.map { URLQueryItem(name:$0.key,value:$0.value) };return c.url! }
     func answer(_ raw:String) async -> String? {
         var text=SpokenRequest.clean(raw)
+        let repairedTicker = Self.spokenTicker(in: text)
+        if let repairedTicker {
+            let plain = repairedTicker.replacingOccurrences(of: ".SA", with: "")
+            if !text.uppercased().contains(plain) {
+                text += " " + plain
+            }
+        }
         var n=NativeWeatherLookup.normalize(text)
         if let last = lastSports, now().timeIntervalSince(last) < 120,
            match(n, #"\b(espn|fonte|fontes)\b"#) {
@@ -45,12 +52,60 @@ import CoreFoundation
             n = NativeWeatherLookup.normalize(text)
         } else { pendingTeam = nil }
         if match(n,#"\b(toca|toque|play|musica|comprar|compre|vender|venda|invista)\b"#) { return nil }
-        if match(n,#"\b(cotacao|acoes|acao|stocks|ticker|bolsa)\b"#) || (match(n,#"\b(dolar|euro|bitcoin|ethereum|ibovespa)\b"#) && match(n,#"\b(quanto|preco|valor|vale|esta|ta)\b"#)) {
+        let hasTicker = repairedTicker != nil || match(text,#"(?i)\b[A-Z]{4}\s?\d{1,2}(?:\.SA)?\b"#)
+        if match(n,#"\b(cotacao|acoes|acao|stocks|ticker|bolsa)\b"#)
+            || (match(n,#"\b(dolar|euro|bitcoin|ethereum|ibovespa)\b"#) && match(n,#"\b(quanto|preco|valor|vale|esta|ta)\b"#))
+            || (hasTicker && match(n,#"\b(cotacao|preco|valor|acoes|acao|stocks|ticker|bolsa|esta|ta)\b"#)) {
             return await quote(text,n)
         }
         if match(n,#"\b(joga|jogam|jogo|jogos|partida|partidas|enfrenta)\b"#) { return await schedule(text,n) }
         return nil
     }
+    private static func spokenTicker(in raw:String) -> String? {
+        let n = NativeWeatherLookup.normalize(SpokenRequest.clean(raw))
+        let rules: [(String,String)] = [
+            (#"\bp\s*e\s*t\s*r\s*(?:4|quatro)\b"#, "PETR4"),
+            (#"\bpetr\s*(?:4|quatro)\b"#, "PETR4"),
+            (#"\bpetrobras\s*(?:pn|preferencial|4|quatro)\b"#, "PETR4"),
+            (#"\bpetrobras\s*(?:on|ordinaria|ordinarias|3|tres)\b"#, "PETR3"),
+
+            (#"\bv\s*a\s*l\s*e\s*(?:3|tres)\b"#, "VALE3"),
+            (#"\bvale\s*(?:3|tres)\b"#, "VALE3"),
+
+            (#"\bi\s*t\s*u\s*b\s*(?:4|quatro)\b"#, "ITUB4"),
+            (#"\bitub\s*(?:4|quatro)\b"#, "ITUB4"),
+            (#"\bitau\s*(?:unibanco)?\s*(?:pn|preferencial|4|quatro)?\b"#, "ITUB4"),
+
+            (#"\bb\s*b\s*a\s*s\s*(?:3|tres)\b"#, "BBAS3"),
+            (#"\bbbas\s*(?:3|tres)\b"#, "BBAS3"),
+            (#"\bbanco do brasil\b"#, "BBAS3"),
+
+            (#"\bb\s*b\s*d\s*c\s*(?:4|quatro)\b"#, "BBDC4"),
+            (#"\bbbdc\s*(?:4|quatro)\b"#, "BBDC4"),
+            (#"\bbradesco\s*(?:pn|preferencial|4|quatro)?\b"#, "BBDC4"),
+
+            (#"\bw\s*e\s*g\s*e\s*(?:3|tres)\b"#, "WEGE3"),
+            (#"\bwege\s*(?:3|tres)\b"#, "WEGE3"),
+            (#"\bweg\b"#, "WEGE3"),
+
+            (#"\bm\s*g\s*l\s*u\s*(?:3|tres)\b"#, "MGLU3"),
+            (#"\bmglu\s*(?:3|tres)\b"#, "MGLU3"),
+            (#"\bmagalu\b"#, "MGLU3"),
+            (#"\bmagazine luiza\b"#, "MGLU3"),
+
+            (#"\ba\s*b\s*e\s*v\s*(?:3|tres)\b"#, "ABEV3"),
+            (#"\babev\s*(?:3|tres)\b"#, "ABEV3"),
+            (#"\bambev\b"#, "ABEV3"),
+
+            (#"\bi\s*t\s*s\s*a\s*(?:4|quatro)\b"#, "ITSA4"),
+            (#"\bitsa\s*(?:4|quatro)\b"#, "ITSA4")
+        ]
+        for (pattern, symbol) in rules {
+            if NativeWeatherLookup.matches(n, pattern) { return symbol }
+        }
+        return nil
+    }
+
     private func quote(_ text:String,_ n:String) async -> String {
         if match(n,#"\b(ontem|amanha|semana|mes|historico)\b"#) { return "Por enquanto consulto a última cotação disponível. Qual ativo você quer?" }
         let regex=try! NSRegularExpression(pattern:#"\b[A-Za-z]{4}\s?\d{1,2}(?:\.SA)?\b"#,options:.caseInsensitive)
