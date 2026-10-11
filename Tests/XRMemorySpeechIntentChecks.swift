@@ -23,6 +23,11 @@ struct XRMemorySpeechIntentChecks {
     @MainActor static func main() async throws {
         var checks = 0
         func check(_ condition: Bool, _ label: String) { precondition(condition, label); checks += 1 }
+        for utterance in ["Só me fala uma coisa, qual é o nome dos meus irmãos", "Eu quero que você me diga qual é o nome dos meus irmãos", "Me diga qual é o nome dos meus irmãos"] {
+            check(XRMemoryIntent.parse(utterance) == .recall("meu irmão", explicit:true), "framed recall")
+            check(XRMemoryIntent.suggestedFact(utterance) == nil, "question cannot become suggested memory")
+        }
+        check(XRMemoryIntent.suggestedFact("Minha pergunta é vai chover amanhã em Altinópolis?") == nil, "weather question not memory")
         let save: XRMemoryIntent = .save(subject: "a Mel", statement: "a Mel é minha gata", correction: false)
         let positive = [
             "Guarde que a Mel é minha gata.",
@@ -117,6 +122,28 @@ struct XRMemorySpeechIntentChecks {
         let failReply = try await failure.converse(text: "Por favor, guarda que a Mel é minha gata.", language: "pt-BR", context: nil)
         check(!failReply.contains("Salvei"), "failed disk write not acknowledged as saved")
         check(failureBase.conversationCalls == 0, "failure not delegated to LLM to invent saved acknowledgement")
+        let logicStore = XRPersistentMemory(url:root.appendingPathComponent("logic/memory-v1.json"))
+        let logicBase = SpeechIntentFixtureRuntime()
+        let isolatedPending = XRMemoryPendingState()
+        var logicCalls = 0
+        let integrated = MemoryTARSRuntime(underlying:logicBase,memory:{logicStore},pendingState:isolatedPending,logicalRecall:{ _,_ in
+            logicCalls += 1
+            return "Pelos fatos registrados: pessoa sintética."
+        })
+        _ = try await integrated.converse(text:"Guarde que Ivo é meu irmão.",language:"pt",context:nil)
+        check(logicCalls == 0, "save bypasses read-only interpreter")
+        let initialRevision = try logicStore.load().revision
+        let logicalAnswer = try await integrated.converse(text:"Qual o nome dos meus dois irmãos?",language:"pt",context:nil)
+        check(logicalAnswer.contains("pessoa sintética") && logicCalls == 1, "recall routed to interpreter")
+        check(try logicStore.load().revision == initialRevision, "reasoning leaves memory untouched")
+        _ = try await integrated.converse(text:"Qual a previsão do tempo amanhã?",language:"pt",context:nil)
+        check(logicCalls == 1, "weather bypasses memory interpreter")
+        let stale = MemoryTARSRuntime(underlying:logicBase,memory:{logicStore},pendingState:isolatedPending,logicalRecall:{ _,_ in
+            _ = try logicStore.save(subject:"Rui",statement:"Rui é meu irmão",correction:false)
+            return "stale conclusion"
+        })
+        let guarded = try await stale.converse(text:"Quem é Ivo?",language:"pt",context:nil)
+        check(!guarded.contains("stale conclusion"), "memory change invalidates in-flight inference")
         print("PASS: \(checks) memory speech-intent checks; explicit commands, real temporary files, no ASR or device")
     }
 }

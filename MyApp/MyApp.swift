@@ -22,10 +22,21 @@ struct MyApp: App {
         baseURL = coreURL
         pairingSecret = "tars-xr-local-test"
         #endif
-        return MemoryTARSRuntime(underlying: RemoteTARSRuntime(
-            client: TARSClient(baseURL: baseURL),
-            pairingSecret: pairingSecret
-        ))
+        #if DEBUG
+        try? NativeAIKeychain.importProvisioning()
+        #endif
+        let remote = RemoteTARSRuntime(client: TARSClient(baseURL: baseURL), pairingSecret: pairingSecret)
+        let services: any TARSRuntime
+        var logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil
+        if (try? NativeAIKeychain.load()) != nil {
+            services = NativeAIRuntime(body: remote, ai: NativeAIRuntime.service)
+            let reasoner = XRMemoryReasoner { try await NativeAIRuntime.service.interpretMemory($0) }
+            logicalRecall = { try await reasoner.answer($0,document:$1) }
+        } else {
+            // Provisioning must succeed before replacing the validated voice/vision path.
+            services = remote
+        }
+        return MemoryTARSRuntime(underlying: MigratingTARSRuntime(remaining: services, weather: NativeWeatherLookup()), logicalRecall:logicalRecall)
     }
 
     var body: some Scene {

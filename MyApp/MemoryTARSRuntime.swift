@@ -33,6 +33,7 @@ final class MemoryTARSRuntime: TARSRuntime {
         #endif
     }
 
+    private let logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)?
     private let underlying: any TARSRuntime
     private let memory: @MainActor () throws -> XRPersistentMemory
     private var store: XRPersistentMemory?
@@ -49,7 +50,9 @@ final class MemoryTARSRuntime: TARSRuntime {
     init(underlying: any TARSRuntime,
          memory: @escaping @MainActor () throws -> XRPersistentMemory = { try XRPersistentMemory.deviceStore() },
          uptime: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
-         pendingState: XRMemoryPendingState? = nil) {
+         pendingState: XRMemoryPendingState? = nil,
+         logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil) {
+        self.logicalRecall = logicalRecall
         self.underlying = underlying; self.memory = memory; self.uptime = uptime
         self.pendingState = pendingState ?? .shared
         traceMemory("runtime_ready")
@@ -128,6 +131,28 @@ final class MemoryTARSRuntime: TARSRuntime {
         }
         // Internal wake summaries are not user instructions and cannot write memory.
         let internalWake = context?["internal_wake_summary"] as? Bool == true
+        if !internalWake, !SpokenRequest.isServiceQuery(text), pendingState.fact == nil, pendingState.suggestion == nil, let logicalRecall {
+            let eligible: Bool
+            switch XRMemoryIntent.parse(text) {
+            case .recall, .recallAttribute: eligible = true
+            case .ordinary: eligible = XRMemoryIntent.isQuestionLike(text)
+            default: eligible = false
+            }
+            if eligible {
+                do {
+                    let before = try store.load()
+                    if let answer = try await logicalRecall(text,before) {
+                        try Task.checkCancellation()
+                        guard try store.load().revision == before.revision else { throw XRMemoryError.changed }
+                        invalidateConversation()
+                        return answer
+                    }
+                } catch is CancellationError { throw CancellationError() }
+                catch {
+                    return "Não consegui concluir essa consulta à memória com segurança. Nenhuma informação foi alterada."
+                }
+            }
+        }
         if !internalWake, let pending = pendingState.suggestion, let rename = XRMemoryIntent.renameCorrection(text) {
             let update = applyPendingRename(rename, to: pending.facts)
             if update.changed {

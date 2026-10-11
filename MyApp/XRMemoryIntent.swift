@@ -37,6 +37,7 @@ enum XRMemoryIntent: Equatable {
     nonisolated static func isQuestionLike(_ raw: String) -> Bool {
         let text = commandText(raw).trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasSuffix("?") { return true }
+        if captures(#"\b(?:qual|quais|quem|quando|onde|quanto|what|who|when|where)\b"#, in: text) != nil { return true }
         return captures(#"(?i)(?:^|[.!?]\s*)(?:que\s+(?:dia|data|horas)|quem|qual|quais|quando|onde|como|por\s+que|porque|o\s+que|who|what|when|where|how|why)\b"#, in: text) != nil
     }
 
@@ -413,7 +414,11 @@ enum XRMemoryIntent: Equatable {
             return .recall("meu aniversário", explicit: true)
         }
         // Remove a discourse 'e/and' only from read-only questions, never to authorize writes.
-        let question = text.replacingOccurrences(of: #"(?i)^(?:e|and)[\s,]+"#, with: "", options: .regularExpression)
+        var question = text.replacingOccurrences(of: #"(?i)^(?:e|and)[\s,]+"#, with: "", options: .regularExpression)
+        // Read-only framing removal cannot authorize a save or correction.
+        for _ in 0..<3 {
+            question = question.replacingOccurrences(of: #"(?i)^(?:(?:s[oó]\s+)?me\s+(?:fala|diga|diz)(?:\s+uma\s+coisa)?|(?:eu\s+)?quero\s+que\s+(?:(?:voc[eê])\s+)?(?:me\s+)?(?:diga|fale)|minha\s+pergunta\s+[ée])\s*[,.:;]?\s*"#, with: "", options: .regularExpression)
+        }
         let nameQuestion = #"^(?:qual\s+(?:é\s+|e\s+)?o\s+nome\s+(?:da|do|de)|como\s+(?:se\s+)?chama|como\s+é\s+o\s+nome\s+(?:da|do|de)|(?:(?:você|voce)\s+)?(?:se\s+)?lembra\s+(?:d[oa]\s+|o\s+)?nome\s+(?:da|do|de)|what\s+is\s+the\s+name\s+of)\s+(.+?)[.!?]*$"#
         if let parts = captures(nameQuestion, in: question) {
             let subject = nameOwner(parts[0]) ?? parts[0]

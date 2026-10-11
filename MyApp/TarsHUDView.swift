@@ -96,6 +96,19 @@ struct TarsHUDView: View {
         #endif
         .task {
             #if DEBUG
+            if ProcessInfo.processInfo.environment["TARS_NATIVE_AI_PROBE"] == "1" {
+                let result=await NativeAIProbe.run()
+                try? result.write(to:URL.documentsDirectory.appendingPathComponent("native-ai-probe.txt"),atomically:true,encoding:.utf8)
+                return
+            }
+            if ProcessInfo.processInfo.environment["TARS_NATIVE_WEATHER_PROBE"] == "1" {
+                let local = NativeWeatherLookup()
+                let current = await local.answer("Qual a temperatura em Ribeirão Preto, São Paulo agora?") ?? "FAIL: no native answer"
+                let average = await local.answer("Qual a temperatura média amanhã em Altinópolis, São Paulo?") ?? "FAIL: no native answer"
+                let result = "Native XR weather (direct HTTPS, no remote runtime):\n" + current + "\n" + average
+                try? result.write(to: URL.documentsDirectory.appendingPathComponent("native-weather-probe.txt"), atomically: true, encoding: .utf8)
+                return
+            }
             if ProcessInfo.processInfo.environment["TARS_YAHOO_PROBE"] == "1" {
                 let result = await yahoo.runDeviceCheck()
                 try? result.write(to: URL.documentsDirectory.appendingPathComponent("yahoo-probe-result.txt"), atomically: true, encoding: .utf8)
@@ -401,6 +414,7 @@ struct EngineeringPanel: View {
 
 private struct AudioControls: View {
     @ObservedObject var audio: XRAudioController
+    @ObservedObject private var webService = NativeAIRuntime.service
     var body: some View {
         VStack(spacing: 8) {
             Toggle("Conversar com IA", isOn: $audio.useAI)
@@ -425,6 +439,12 @@ private struct AudioControls: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(maxHeight: 65)
                 }
+            }
+            if !webService.webDisplay.isEmpty {
+                ScrollView {
+                    Text(.init(webService.webDisplay)).font(.caption).textSelection(.enabled)
+                        .frame(maxWidth:.infinity, alignment:.leading)
+                }.frame(maxHeight:140)
             }
             Text(audio.message).foregroundStyle(.cyan.opacity(0.8))
                 .font(.caption2).lineLimit(3).multilineTextAlignment(.center)
