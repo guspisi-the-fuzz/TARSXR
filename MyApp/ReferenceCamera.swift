@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import Photos
 
 /// One explicit still-photo capture. No recording, library save or network access.
 struct ReferenceCamera: UIViewControllerRepresentable {
@@ -84,7 +85,7 @@ struct VoiceSavedPhoto: Equatable {
 
     var spokenConfirmation: String {
         let label = kind == .selfie ? "Selfie tirada" : "Foto tirada"
-        return "\(label) e salva no XR."
+        return "\(label) e salva no XR e no app Fotos."
     }
 }
 
@@ -154,6 +155,47 @@ enum VoicePhotoStore {
     }
 }
 
+
+@MainActor
+enum VoicePhotoLibrary {
+    static func save(_ image: UIImage) async throws {
+        let current = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+
+        let allowed: Bool
+        switch current {
+        case .authorized, .limited:
+            allowed = true
+
+        case .notDetermined:
+            allowed = await withCheckedContinuation { continuation in
+                PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                    continuation.resume(returning: status == .authorized || status == .limited)
+                }
+            }
+
+        case .denied, .restricted:
+            allowed = false
+
+        @unknown default:
+            allowed = false
+        }
+
+        guard allowed else { throw VoiceCameraError.photoLibraryDenied }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }, completionHandler: { success, error in
+                if success {
+                    continuation.resume(returning: ())
+                } else {
+                    continuation.resume(throwing: error ?? VoiceCameraError.photoLibrarySaveFailed)
+                }
+            })
+        }
+    }
+}
+
 // MARK: - XR_VOICE_CAMERA_28
 
 enum VoiceCameraError: LocalizedError {
@@ -162,6 +204,8 @@ enum VoiceCameraError: LocalizedError {
     case invalidImage
     case captureFailed
     case saveFailed
+    case photoLibraryDenied
+    case photoLibrarySaveFailed
 
     var errorDescription: String? {
         switch self {
@@ -175,6 +219,10 @@ enum VoiceCameraError: LocalizedError {
             return "Não consegui capturar a imagem agora."
         case .saveFailed:
             return "Capturei a foto, mas não consegui salvar no XR."
+        case .photoLibraryDenied:
+            return "Capturei a foto, mas não tenho permissão para salvar no app Fotos."
+        case .photoLibrarySaveFailed:
+            return "Capturei a foto, mas não consegui salvar no app Fotos."
         }
     }
 }
@@ -355,6 +403,7 @@ enum VoiceCameraAction {
         switch command.kind {
         case .photo, .selfie:
             let saved = try VoicePhotoStore.save(image, kind: command.kind)
+            try await VoicePhotoLibrary.save(image)
             return saved.spokenConfirmation
 
         case .describe, .findMel:

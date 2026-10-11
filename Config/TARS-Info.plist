@@ -7,5 +7,9 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>O TARS salva fotos tiradas por comando de voz no app Fotos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>O TARS usa a biblioteca de fotos apenas para salvar fotos tiradas por comando de voz.</string>
 </dict>
 </plist>
