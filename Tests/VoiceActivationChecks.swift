@@ -34,6 +34,11 @@ import Foundation
             check(p.consume("fala ambiente") == .ignore, "Ambient speech after sleep")
         }
         check(p.consume("wake up") == .acknowledge, "English wake")
+        var aliases = VoiceActivationPolicy()
+        check(aliases.consume("Tais") == .acknowledge, "ASR alias Tais wakes TARS")
+        check(aliases.consume("Tarso, tell me a joke") == .request("tell me a joke"), "ASR alias Tarso routes request")
+        check(aliases.consume("T A R S, qual a previsão do tempo?") == .request("qual a previsão do tempo?"), "Spelled TARS routes request")
+        check(aliases.consume("Tais, pode dormir") == .sleep, "ASR alias can sleep")
         check(p.consume("tell me about sleep") == .request("tell me about sleep"), "A mention of sleep is not a sleep command")
         var sleeping = VoiceActivationPolicy()
         sleeping.replyFinished(now: 100)

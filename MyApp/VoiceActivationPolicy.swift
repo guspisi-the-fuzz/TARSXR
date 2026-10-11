@@ -31,8 +31,9 @@ struct VoiceActivationPolicy {
         // Silence never changes awake/asleep state.
         guard !text.isEmpty else { return .ignore }
 
+        let wakeName = SpokenRequest.wakeAliasPattern
         let sleepPattern =
-            #"(?i)^\s*(?:tars[\s,.:;!?—-]*)?(?:go\s+to\s+sleep|sleep|dorme|pode\s+dormir|vai\s+dormir|fica\s+quieto|fique\s+quieto)\s*[.!?]*\s*$"#
+            #"(?i)^\s*(?:(?:\b"# + wakeName + #"\b)[\s,.:;!?—-]*)?(?:go\s+to\s+sleep|sleep|dorme|pode\s+dormir|vai\s+dormir|fica\s+quieto|fique\s+quieto)\s*[.!?]*\s*$"#
 
         if text.range(of: sleepPattern, options: .regularExpression) != nil {
             awake = false
@@ -41,7 +42,7 @@ struct VoiceActivationPolicy {
             return .sleep
         }
 
-        let wakePattern = #"(?i)\b(?:tars|wake\s+up)\b[\s,.:;!?—-]*"#
+        let wakePattern = #"(?i)(?:\b"# + wakeName + #"\b|\bwake\s+up\b)[\s,.:;!?—-]*"#
         let wakeRange = text.range(of: wakePattern, options: .regularExpression)
 
         let wasAwake = awake
@@ -56,7 +57,7 @@ struct VoiceActivationPolicy {
         // Strip only a leading address (including common greetings), never the
         // words before an embedded name. Preserve the full question otherwise.
         let leadingWakePattern =
-            #"(?i)^\s*(?:(?:ei|oi|olá|ola|hey|hi|hello|ok|okay)[\s,.:;!?—-]+)?(?:tars|wake\s+up)\b[\s,.:;!?—-]*"#
+            #"(?i)^\s*(?:(?:ei|oi|olá|ola|hey|hi|hello|ok|okay)[\s,.:;!?—-]+)?(?:\b"# + wakeName + #"\b|\bwake\s+up\b)[\s,.:;!?—-]*"#
         let leadingWake = text.range(of: leadingWakePattern, options: .regularExpression)
         let request = leadingWake.map { String(text[$0.upperBound...]) } ?? text
         let cleaned = request.trimmingCharacters(in: .whitespacesAndNewlines)
