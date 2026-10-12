@@ -145,13 +145,54 @@ final class XRPersistentMemory {
         guard try readBytes() == data else { throw XRMemoryError.unavailable }
     }
 
+    private func relationAliasCorrectionMatches(for subject: String, document: XRMemoryDocument) -> [XRMemoryFact] {
+        let key = Self.key(subject)
+        guard key == "minha mae" || key == "meu pai" else { return [] }
+
+        return document.facts.filter { fact in
+            let subjectKey = Self.key(fact.subject)
+            let statementKey = Self.key(fact.statement)
+
+            if fact.key == key || subjectKey == key { return true }
+            if XRMemoryIntent.referenceKeys(subject: fact.subject, statement: fact.statement).contains(key) {
+                return true
+            }
+
+            if key == "minha mae" {
+                return statementKey.hasSuffix(" e minha mae")
+                    || statementKey.hasPrefix("minha mae se chama ")
+                    || statementKey.contains(" minha mae se chama ")
+                    || statementKey.hasPrefix("nome da minha mae")
+                    || statementKey.contains(" nome da minha mae ")
+            }
+
+            if key == "meu pai" {
+                return statementKey.hasSuffix(" e meu pai")
+                    || statementKey.hasPrefix("meu pai se chama ")
+                    || statementKey.contains(" meu pai se chama ")
+                    || statementKey.hasPrefix("nome do meu pai")
+                    || statementKey.contains(" nome do meu pai ")
+            }
+
+            return false
+        }
+    }
+
     func save(subject: String, statement: String, correction: Bool) throws -> XRMemoryFact {
         try Task.checkCancellation()
         guard Self.validSubject(subject), Self.validText(statement, max: 480) else { throw XRMemoryError.unsupported }
         let expected = try readBytes()
         var document = try load()
         let key = Self.key(subject)
-        let matches = facts(for: subject, document: document)
+        var matches: [XRMemoryFact]
+        if correction && (key == "minha mae" || key == "meu pai") {
+            matches = relationAliasCorrectionMatches(for: subject, document: document)
+        } else {
+            matches = facts(for: subject, document: document)
+        }
+        if correction, matches.isEmpty {
+            matches = relationAliasCorrectionMatches(for: subject, document: document)
+        }
         guard matches.count <= 1 else { throw XRMemoryError.ambiguous }
         let index = matches.first.flatMap { existing in document.facts.firstIndex { $0.key == existing.key } }
         if correction && index == nil { throw XRMemoryError.missing }

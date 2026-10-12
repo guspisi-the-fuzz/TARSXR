@@ -131,6 +131,25 @@ final class MemoryTARSRuntime: TARSRuntime {
         }
         // Internal wake summaries are not user instructions and cannot write memory.
         let internalWake = context?["internal_wake_summary"] as? Bool == true
+        if !internalWake,
+           !SpokenRequest.isServiceQuery(text),
+           localRelationNameRecallSubject(text: text) != nil {
+            do {
+                if let relationRecall = try localRelationNameRecall(text: text, store: store, english: english) {
+                    invalidateConversation()
+                    return relationRecall
+                }
+            } catch let error as XRMemoryError {
+                #if DEBUG
+                traceMemory("memory_error", fields: ["code": XRMemoryTrace.errorCode(error)])
+                #else
+                traceMemory("memory_error")
+                #endif
+                invalidateConversation()
+                return error.localizedDescription
+            }
+        }
+
         if !internalWake, !SpokenRequest.isServiceQuery(text), pendingState.fact == nil, pendingState.suggestion == nil, let logicalRecall {
             let eligible: Bool
             switch XRMemoryIntent.parse(text) {
@@ -156,6 +175,53 @@ final class MemoryTARSRuntime: TARSRuntime {
                 }
             }
         }
+        if !internalWake, let relationName = localRelationNameCorrection(text: text) {
+            do {
+                let fact = try store.save(subject: relationName.subject,
+                                          statement: relationName.statement,
+                                          correction: true)
+                traceMemory("save_verified", fields: ["correction": true])
+                lastKeys = [fact.key]
+                lastRecallAt = ProcessInfo.processInfo.systemUptime
+                invalidateConversation()
+                return english ? "Saved on this XR: \(fact.statement)."
+                    : "Salvei neste XR: \(XRMemoryIntent.naturalizedStatement(fact.statement))"
+            } catch let error as XRMemoryError {
+                #if DEBUG
+                traceMemory("memory_error", fields: ["code": XRMemoryTrace.errorCode(error)])
+                #else
+                traceMemory("memory_error")
+                #endif
+                invalidateConversation()
+                return error.localizedDescription
+            }
+        }
+
+        if !internalWake, let relationForgetSubject = localRelationNameForget(text: text) {
+            do {
+                let existed = try store.forget(subject: relationForgetSubject)
+                traceMemory("forget_verified", fields: ["fact_existed": existed])
+                lastKeys = []
+                lastRecallAt = 0
+                invalidateConversation()
+
+                if existed {
+                    return english ? "Forgot it on this XR." : "Apaguei neste XR."
+                }
+
+                return english ? "I don't have that saved on this XR."
+                    : "Não tenho isso salvo neste XR."
+            } catch let error as XRMemoryError {
+                #if DEBUG
+                traceMemory("memory_error", fields: ["code": XRMemoryTrace.errorCode(error)])
+                #else
+                traceMemory("memory_error")
+                #endif
+                invalidateConversation()
+                return error.localizedDescription
+            }
+        }
+
         if !internalWake, let pending = pendingState.suggestion, let rename = XRMemoryIntent.renameCorrection(text) {
             let update = applyPendingRename(rename, to: pending.facts)
             if update.changed {
@@ -187,7 +253,9 @@ final class MemoryTARSRuntime: TARSRuntime {
                 invalidateConversation(); return error.localizedDescription
             }
         }
-        if !internalWake, let rename = XRMemoryIntent.renameCorrection(text) {
+        if !internalWake,
+           XRMemoryIntent.explicitEntityAttributeFacts(text) == nil,
+           let rename = XRMemoryIntent.renameCorrection(text) {
             do {
                 let fact = try store.renameIdentity(old: rename.old, new: rename.new)
                 traceMemory("save_verified", fields: ["correction": true])
@@ -531,6 +599,302 @@ final class MemoryTARSRuntime: TARSRuntime {
         return false
     }
 
+    private func localRelationNameRecallSubject(text raw: String) -> String? {
+        let key = XRPersistentMemory.key(raw)
+
+        switch key {
+        case "qual o nome da minha mae",
+             "qual e o nome da minha mae",
+             "qual o nome de minha mae",
+             "qual e o nome de minha mae",
+             "voce lembra o nome da minha mae",
+             "lembra o nome da minha mae",
+             "voce lembra o nome de minha mae",
+             "lembra o nome de minha mae",
+             "como minha mae se chama",
+             "como se chama minha mae",
+             "e qual o nome da minha mae",
+             "como chama minha mae",
+             "voce lembra do nome da minha mae",
+             "quem e a minha mae",
+             "o que voce sabe sobre minha mae",
+             "como e o nome da minha mae",
+             "por favor qual o nome da minha mae":
+            return "minha mãe"
+
+        case "qual o nome do meu pai",
+             "qual e o nome do meu pai",
+             "qual o nome de meu pai",
+             "qual e o nome de meu pai",
+             "voce lembra o nome do meu pai",
+             "lembra o nome do meu pai",
+             "voce lembra o nome de meu pai",
+             "lembra o nome de meu pai",
+             "como meu pai se chama",
+             "como se chama meu pai",
+             "e qual o nome do meu pai",
+             "como chama meu pai",
+             "voce lembra do nome do meu pai",
+             "quem e o meu pai",
+             "o que voce sabe sobre meu pai",
+             "como e o nome do meu pai",
+             "por favor qual o nome do meu pai":
+            return "meu pai"
+
+        default:
+            return nil
+        }
+    }
+
+    private func localRelationNameRecall(text raw: String, store: XRPersistentMemory, english: Bool) throws -> String? {
+        guard let subject = localRelationNameRecallSubject(text: raw) else { return nil }
+
+        let document = try store.load()
+        let matches = localExactRelationNameFacts(subject: subject, document: document)
+        traceMemory("recall_lookup", fields: [
+            "fact_count": document.facts.count,
+            "found": !matches.isEmpty,
+            "match_count": matches.count
+        ])
+
+        if matches.isEmpty {
+            lastKeys = []
+            lastRecallAt = 0
+
+            if english {
+                return subject == "minha mãe"
+                    ? "I don't have your mother's name saved on this XR."
+                    : "I don't have your father's name saved on this XR."
+            }
+
+            return subject == "minha mãe"
+                ? "Não tenho o nome da sua mãe salvo neste XR."
+                : "Não tenho o nome do seu pai salvo neste XR."
+        }
+
+        if matches.count > 1 {
+            lastKeys = matches.map { $0.key }
+            lastRecallAt = ProcessInfo.processInfo.systemUptime
+
+            let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            let options = matches.enumerated().map { index, fact in
+                let label = index < letters.count ? String(letters[index]) : "\(index + 1)"
+                return "\(label)) \(localRelationNameValue(fact: fact, subject: subject))"
+            }.joined(separator: "\n\n")
+
+            return english
+                ? "I found more than one possible name:\n\n\(options)\n\nWhich one is correct?"
+                : "Encontrei mais de uma possibilidade para nome:\n\n\(options)\n\nQual é a correta?"
+        }
+
+        guard let fact = matches.first else { return nil }
+
+        lastKeys = [fact.key]
+        lastRecallAt = ProcessInfo.processInfo.systemUptime
+
+        let value = localRelationNameValue(fact: fact, subject: subject)
+
+        if english {
+            return subject == "minha mãe"
+                ? "Your mother's name is \(value)."
+                : "Your father's name is \(value)."
+        }
+
+        return subject == "minha mãe"
+            ? "Sua mãe se chama \(value)."
+            : "Seu pai se chama \(value)."
+    }
+
+    private func localExactRelationNameFacts(subject: String, document: XRMemoryDocument) -> [XRMemoryFact] {
+        let targetKey = XRPersistentMemory.key(subject)
+
+        return document.facts.filter { fact in
+            let subjectKey = XRPersistentMemory.key(fact.subject)
+            let statementKey = XRPersistentMemory.key(fact.statement)
+
+            if subjectKey == targetKey { return true }
+            if localCapturedRelationName(statement: fact.statement, subject: subject) != nil {
+                return true
+            }
+
+            if targetKey == "minha mae" {
+                if subjectKey == "nome da minha mae" || subjectKey == "nome de minha mae" {
+                    return true
+                }
+
+                return statementKey.hasSuffix(" e minha mae")
+                    || statementKey.hasPrefix("minha mae se chama ")
+                    || statementKey.contains(" minha mae se chama ")
+                    || statementKey.hasPrefix("nome da minha mae e ")
+                    || statementKey.hasPrefix("o nome da minha mae e ")
+                    || statementKey.hasPrefix("nome de minha mae e ")
+                    || statementKey.hasPrefix("o nome de minha mae e ")
+                    || statementKey.contains(" nome da minha mae e ")
+                    || statementKey.contains(" o nome da minha mae e ")
+                    || statementKey.contains(" nome de minha mae e ")
+                    || statementKey.contains(" o nome de minha mae e ")
+            }
+
+            if targetKey == "meu pai" {
+                if subjectKey == "nome do meu pai" || subjectKey == "nome de meu pai" {
+                    return true
+                }
+
+                return statementKey.hasSuffix(" e meu pai")
+                    || statementKey.hasPrefix("meu pai se chama ")
+                    || statementKey.contains(" meu pai se chama ")
+                    || statementKey.hasPrefix("nome do meu pai e ")
+                    || statementKey.hasPrefix("o nome do meu pai e ")
+                    || statementKey.hasPrefix("nome de meu pai e ")
+                    || statementKey.hasPrefix("o nome de meu pai e ")
+                    || statementKey.contains(" nome do meu pai e ")
+                    || statementKey.contains(" o nome do meu pai e ")
+                    || statementKey.contains(" nome de meu pai e ")
+                    || statementKey.contains(" o nome de meu pai e ")
+            }
+
+            return false
+        }
+    }
+
+    private func localRelationNameValue(fact: XRMemoryFact, subject: String) -> String {
+        if let captured = localCapturedRelationName(statement: fact.statement, subject: subject) {
+            return captured
+        }
+
+        return fact.subject
+    }
+
+    private func localCapturedRelationName(statement: String, subject: String) -> String? {
+        let subjectKey = XRPersistentMemory.key(subject)
+        let patterns: [String]
+
+        if subjectKey == "minha mae" {
+            patterns = [
+                #"^\s*(?:a\s+)?minha\s+m(?:ãe|ae)\s+(?:é|e|eh|(?:se\s+)?chama(?:\s*-\s*se)?)\s+(.+?)\s*[.!?]?\s*$"#,
+                #"^\s*(?:o\s+)?nome\s+d(?:a|e)\s+minha\s+m(?:ãe|ae)\s+(?:é|e|eh|(?:se\s+)?chama(?:\s*-\s*se)?)\s+(.+?)\s*[.!?]?\s*$"#
+            ]
+        } else if subjectKey == "meu pai" {
+            patterns = [
+                #"^\s*(?:o\s+)?meu\s+pai\s+(?:é|e|eh|(?:se\s+)?chama(?:\s*-\s*se)?)\s+(.+?)\s*[.!?]?\s*$"#,
+                #"^\s*(?:o\s+)?nome\s+d(?:o|e)\s+meu\s+pai\s+(?:é|e|eh|(?:se\s+)?chama(?:\s*-\s*se)?)\s+(.+?)\s*[.!?]?\s*$"#
+            ]
+        } else {
+            return nil
+        }
+
+        let range = NSRange(statement.startIndex..<statement.endIndex, in: statement)
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+                continue
+            }
+
+            guard let match = regex.firstMatch(in: statement, range: range),
+                  match.numberOfRanges > 1,
+                  let valueRange = Range(match.range(at: 1), in: statement) else {
+                continue
+            }
+
+            let value = String(statement[valueRange])
+                .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?\n\t"))
+
+            if !value.isEmpty {
+                return value
+            }
+        }
+
+        return nil
+    }
+
+    private func localRelationNameForget(text raw: String) -> String? {
+        let key = XRPersistentMemory.key(raw)
+
+        let isForget = key.hasPrefix("esqueca ")
+            || key.hasPrefix("esquece ")
+            || key.hasPrefix("apague ")
+            || key.hasPrefix("apaga ")
+            || key.hasPrefix("remova ")
+            || key.hasPrefix("remove ")
+
+        guard isForget else { return nil }
+
+        if key.contains("nome da minha mae") || key.contains("nome de minha mae") {
+            return "minha mãe"
+        }
+
+        if key.contains("nome do meu pai") || key.contains("nome de meu pai") {
+            return "meu pai"
+        }
+
+        return nil
+    }
+
+    private func localRelationNameCorrection(text raw: String) -> (subject: String, statement: String)? {
+        let key = XRPersistentMemory.key(raw)
+        guard key.hasPrefix("corrija ") || key.hasPrefix("corrige ") || key.hasPrefix("correcao ") || key.hasPrefix("correção ") else {
+            return nil
+        }
+
+        let patterns: [(pattern: String, subject: String, prefix: String)] = [
+            (#"(?i)\bminha\s+m(?:ãe|ae)\s+(?:se\s+)?chama(?:\s*-\s*se)?\s+(.+?)(?:[.!?]|$)"#, "minha mãe", "Minha mãe se chama "),
+            (#"(?i)\bnome\s+d[ae]\s+minha\s+m(?:ãe|ae)\s+(?:chama(?:\s*-\s*se)?|é|e|eh|:)\s+(.+?)(?:[.!?]|$)"#, "minha mãe", "Minha mãe se chama "),
+            (#"(?i)\bmeu\s+pai\s+(?:se\s+)?chama(?:\s*-\s*se)?\s+(.+?)(?:[.!?]|$)"#, "meu pai", "Meu pai se chama "),
+            (#"(?i)\bnome\s+d[eo]\s+meu\s+pai\s+(?:chama(?:\s*-\s*se)?|é|e|eh|:)\s+(.+?)(?:[.!?]|$)"#, "meu pai", "Meu pai se chama ")
+        ]
+
+        for item in patterns {
+            guard let regex = try? NSRegularExpression(pattern: item.pattern) else { continue }
+            let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+            guard let match = regex.firstMatch(in: raw, range: range),
+                  match.numberOfRanges > 1,
+                  let valueRange = Range(match.range(at: 1), in: raw) else { continue }
+
+            let name = String(raw[valueRange])
+                .replacingOccurrences(of: #"(?i)\b(?:guarde|guarda|grave|grava|salve|salva)\s+(?:isso|essa|esta|na memória|na memoria).*$"#,
+                                       with: "",
+                                       options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?\n\t"))
+
+            let nameKey = XRPersistentMemory.key(name)
+            guard !nameKey.isEmpty,
+                  nameKey != "minha mae",
+                  nameKey != "meu pai",
+                  name.count <= 80 else { continue }
+
+            return (item.subject, item.prefix + name)
+        }
+
+        let normalizedCases: [(needle: String, subject: String, prefix: String)] = [
+            ("minha mae se chama ", "minha mãe", "Minha mãe se chama "),
+            ("nome da minha mae chama se ", "minha mãe", "Minha mãe se chama "),
+            ("nome da minha mae e ", "minha mãe", "Minha mãe se chama "),
+            ("meu pai se chama ", "meu pai", "Meu pai se chama "),
+            ("nome do meu pai chama se ", "meu pai", "Meu pai se chama "),
+            ("nome do meu pai e ", "meu pai", "Meu pai se chama ")
+        ]
+
+        for item in normalizedCases {
+            guard let range = key.range(of: item.needle) else { continue }
+            let rawName = String(key[range.upperBound...])
+                .replacingOccurrences(of: #"(?i)\b(?:guarde|guarda|grave|grava|salve|salva)\b.*$"#,
+                                       with: "",
+                                       options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?\n\t"))
+
+            let nameKey = XRPersistentMemory.key(rawName)
+            guard !nameKey.isEmpty,
+                  nameKey != "minha mae",
+                  nameKey != "meu pai",
+                  nameKey.count <= 80 else { continue }
+
+            let name = rawName.capitalized(with: Locale(identifier: "pt_BR"))
+            return (item.subject, item.prefix + name)
+        }
+
+        return nil
+    }
+
     private func localResidenceCandidate(text raw: String) -> (facts: [(subject: String, statement: String)], correction: Bool, explicit: Bool)? {
         func compact(_ raw: String) -> String {
             raw.precomposedStringWithCanonicalMapping
@@ -603,6 +967,17 @@ final class MemoryTARSRuntime: TARSRuntime {
     }
 
     private func localConcreteMemoryAnswer(text raw: String, store: XRPersistentMemory, english: Bool) throws -> String? {
+        let profileDocument = try store.load()
+        if XRMemoryProfileResolverV1.shouldHandle(text: raw, document: profileDocument),
+           let profileAnswer = XRMemoryProfileResolverV1.answer(text: raw, document: profileDocument, english: english) {
+            let profileKeys = XRMemoryProfileResolverV1.followUpKeys(text: raw, document: profileDocument)
+            if !profileKeys.isEmpty {
+                lastKeys = profileKeys
+                lastRecallAt = ProcessInfo.processInfo.systemUptime
+            }
+            return profileAnswer
+        }
+
         let key = XRPersistentMemory.key(raw)
         func canonical(_ raw: String) -> (key: String, display: String) {
             var display = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,;:!?")))
@@ -933,3 +1308,436 @@ final class XRMemoryTrace {
     }
 }
 #endif
+
+
+// MARK: - XR Memory Profile Resolver V1
+// Read-only relational resolver. It does not migrate the memory schema yet;
+// it turns existing explicit facts into a temporary entity profile before
+// falling back to older sentence/alias recall or the model.
+@MainActor
+private enum XRMemoryProfileResolverV1 {
+    struct Profile {
+        var canonical: String
+        var labels: Set<String> = []
+        var names: Set<String> = []
+        var birthDates: Set<String> = []
+        var deathDates: Set<String> = []
+        var relations: Set<String> = []
+        var residence: Set<String> = []
+        var notes: [String] = []
+    }
+
+    static func shouldHandle(text rawText: String, document: XRMemoryDocument) -> Bool {
+        let query = XRPersistentMemory.key(rawText)
+        guard let target = targetEntity(from: query) else { return false }
+
+        if target == "meu pai" || target == "minha mãe" {
+            return asksName(query) || asksBirth(query) || asksWhoOrBroad(query)
+        }
+
+        // Não roubar fluxos antigos ainda:
+        // - Mel já passa nos testes antigos.
+        // - Daniela não deve ser inferida apenas por aparecer dentro do fato da Mel.
+        return false
+    }
+
+    static func followUpKeys(text rawText: String, document: XRMemoryDocument) -> [String] {
+        let query = XRPersistentMemory.key(rawText)
+        guard let target = targetEntity(from: query) else { return [] }
+
+        let targetKey = XRPersistentMemory.key(target)
+
+        // Prefer exact relation references from the schema-v1 resolver.
+        // This keeps "minha mãe" separate from "mãe da Daniela".
+        let relationMatches = document.facts.filter { fact in
+            XRMemoryIntent.referenceKeys(subject: fact.subject, statement: fact.statement).contains(targetKey)
+        }
+
+        if !relationMatches.isEmpty {
+            return relationMatches.map { $0.key }
+        }
+
+        // Fallback for older alias shapes when the profile extracted a single name.
+        let profile = buildProfile(target: target, document: document)
+
+        if let name = profile.names.sorted().first {
+            let nameKey = XRPersistentMemory.key(name)
+            if document.facts.contains(where: { $0.key == nameKey }) {
+                return [nameKey]
+            }
+        }
+
+        return []
+    }
+
+    static func answer(text rawText: String, document: XRMemoryDocument, english: Bool) -> String? {
+        let query = XRPersistentMemory.key(rawText)
+        guard let target = targetEntity(from: query) else { return nil }
+
+        let profile = buildProfile(target: target, document: document)
+        guard hasSignal(profile) else { return nil }
+
+        if asksName(query), profile.names.count > 1 {
+            return ambiguity(field: "nome", values: profile.names)
+        }
+        if asksBirth(query), profile.birthDates.count > 1 {
+            return ambiguity(field: "data de nascimento", values: profile.birthDates)
+        }
+
+        if asksName(query) {
+            if let name = profile.names.sorted().first {
+                return target == "meu pai" ? "Seu pai se chama \(name)." :
+                    target == "minha mãe" ? "Sua mãe se chama \(name)." :
+                    "O nome salvo é \(name)."
+            }
+            return absenceForName(target: target)
+        }
+
+        if asksBirth(query) {
+            if let birth = profile.birthDates.sorted().first {
+                return target == "meu pai" ? "Seu pai nasceu em \(birth)." :
+                    target == "minha mãe" ? "Sua mãe nasceu em \(birth)." :
+                    "\(display(target)) nasceu em \(birth)."
+            }
+            return "Não tenho a data de nascimento salva para \(display(target))."
+        }
+
+        if asksWhoOrBroad(query) {
+            return broadAnswer(target: target, profile: profile)
+        }
+
+        return nil
+    }
+
+    private static func targetEntity(from query: String) -> String? {
+        let padded = " " + query + " "
+
+        if padded.contains(" mae da daniela ") || padded.contains(" mae de daniela ") ||
+            padded.contains(" mãe da daniela ") || padded.contains(" mãe de daniela ") {
+            return nil
+        }
+
+        if padded.contains(" meu pai ") {
+            return "meu pai"
+        }
+
+        if padded.contains(" minha mae ") || padded.contains(" minha mãe ") {
+            return "minha mãe"
+        }
+
+        if padded.contains(" daniela ") || padded.contains(" frighetto ") {
+            return "daniela"
+        }
+
+        if padded.contains(" mel ") {
+            return "mel"
+        }
+
+        return nil
+    }
+
+    private static func buildProfile(target: String, document: XRMemoryDocument) -> Profile {
+        let targetKey = XRPersistentMemory.key(target)
+        var profile = Profile(canonical: target)
+
+        for fact in document.facts {
+            let subjectKey = XRPersistentMemory.key(fact.subject)
+            let statementKey = XRPersistentMemory.key(fact.statement)
+            let allKeys = XRMemoryIntent.referenceKeys(subject: fact.subject, statement: fact.statement)
+
+            let directHit = subjectKey == targetKey || allKeys.contains(targetKey)
+            let mentionHit = mentions(target: target, key: statementKey) || mentions(target: target, key: subjectKey)
+
+            guard directHit || mentionHit else { continue }
+
+            profile.labels.insert(fact.subject)
+            profile.notes.append(fact.statement)
+
+            if let name = extractName(target: target, subject: fact.subject, statement: fact.statement) {
+                profile.names.insert(name)
+            }
+            if let birth = extractDate(kind: .birth, statement: fact.statement) {
+                profile.birthDates.insert(birth)
+            }
+            if let death = extractDate(kind: .death, statement: fact.statement) {
+                profile.deathDates.insert(death)
+            }
+            if statementKey.contains(" namorada") || statementKey.contains("minha namorada") {
+                profile.relations.insert("namorada")
+            }
+            if statementKey.contains(" gata") || statementKey.contains(" gato") {
+                profile.relations.insert("gata")
+            }
+            if statementKey.contains(" mora ") || statementKey.contains("moram") || statementKey.contains("com voce") || statementKey.contains("com você") {
+                profile.residence.insert(cleanSentence(fact.statement))
+            }
+        }
+
+        return profile
+    }
+
+    private enum DateKind { case birth, death }
+
+    private static func extractDate(kind: DateKind, statement: String) -> String? {
+        let patterns: [String]
+        switch kind {
+        case .birth:
+            patterns = [
+                #"(?i)\bnasceu\s+em\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bnasceu\s+no\s+dia\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bnasceu\s+dia\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bdata\s+de\s+nascimento\s*(?:é|e|eh|:)?\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\banivers[aá]rio\s*(?:é|e|eh|:)?\s+(.+?)(?:[.!?]|$)"#
+            ]
+        case .death:
+            patterns = [
+                #"(?i)\bfaleceu\s+em\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bmorreu\s+em\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bdata\s+de\s+falecimento\s*(?:é|e|eh|:)?\s+(.+?)(?:[.!?]|$)"#
+            ]
+        }
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(statement.startIndex..<statement.endIndex, in: statement)
+            guard let match = regex.firstMatch(in: statement, range: range),
+                  match.numberOfRanges > 1,
+                  let valueRange = Range(match.range(at: 1), in: statement) else { continue }
+            return cleanValue(String(statement[valueRange]))
+        }
+        return nil
+    }
+
+    private static func extractName(target: String, subject: String, statement: String) -> String? {
+        let key = XRPersistentMemory.key(statement)
+        let targetKey = XRPersistentMemory.key(target)
+
+        func valid(_ raw: String?) -> String? {
+            guard let raw else { return nil }
+            let value = cleanName(raw)
+            let valueKey = XRPersistentMemory.key(value)
+            guard !valueKey.isEmpty else { return nil }
+            guard valueKey != targetKey else { return nil }
+            guard valueKey != "nome da minha mae" && valueKey != "nome do meu pai" else { return nil }
+            return value
+        }
+
+        // Prefer the existing parser when it already knows how to extract a display name.
+        if let display = XRMemoryIntent.displayName(subject: subject, statement: statement),
+           let value = valid(display) {
+            return value
+        }
+
+        let rawPatterns: [String]
+        switch target {
+        case "meu pai":
+            rawPatterns = [
+                #"(?i)\bmeu\s+pai\s+(?:se\s+)?chama(?:\s*-\s*se)?\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bnome\s+d[eo]\s+meu\s+pai\s+(?:chama(?:\s*-\s*se)?|é|e|eh|:)\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bmeu\s+pai\s+(?:é|eh)\s+(.+?)(?:[.!?]|$)"#
+            ]
+        case "minha mãe":
+            rawPatterns = [
+                #"(?i)\bminha\s+m(?:ãe|ae)\s+(?:se\s+)?chama(?:\s*-\s*se)?\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bnome\s+d[ae]\s+minha\s+m(?:ãe|ae)\s+(?:chama(?:\s*-\s*se)?|é|e|eh|:)\s+(.+?)(?:[.!?]|$)"#,
+                #"(?i)\bminha\s+m(?:ãe|ae)\s+(?:é|eh)\s+(.+?)(?:[.!?]|$)"#
+            ]
+        case "daniela":
+            rawPatterns = [
+                #"(?i)\b(daniela\s+frighetto)\b"#,
+                #"(?i)\bdaniela\s+(?:se\s+)?chama(?:\s*-\s*se)?\s+(.+?)(?:[.!?]|$)"#
+            ]
+        default:
+            rawPatterns = [
+                #"(?i)\b(?:se\s+)?chama(?:\s*-\s*se)?\s+(.+?)(?:[.!?]|$)"#
+            ]
+        }
+
+        for pattern in rawPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(statement.startIndex..<statement.endIndex, in: statement)
+            guard let match = regex.firstMatch(in: statement, range: range),
+                  match.numberOfRanges > 1,
+                  let valueRange = Range(match.range(at: 1), in: statement),
+                  let value = valid(String(statement[valueRange])) else { continue }
+            return value
+        }
+
+        // Normalized fallback for decomposed accents / ASR variants.
+        let normalizedPatterns: [String]
+        switch target {
+        case "meu pai":
+            normalizedPatterns = [
+                #"meu pai(?: se)? chama(?: se)? (.+)$"#,
+                #"nome do meu pai(?: chama se| e| eh|:) (.+)$"#,
+                #"meu pai e (.+)$"#
+            ]
+        case "minha mãe":
+            normalizedPatterns = [
+                #"minha mae(?: se)? chama(?: se)? (.+)$"#,
+                #"nome da minha mae(?: chama se| e| eh|:) (.+)$"#,
+                #"minha mae e (.+)$"#
+            ]
+        default:
+            normalizedPatterns = []
+        }
+
+        for pattern in normalizedPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(key.startIndex..<key.endIndex, in: key)
+            guard let match = regex.firstMatch(in: key, range: range),
+                  match.numberOfRanges > 1,
+                  let valueRange = Range(match.range(at: 1), in: key) else { continue }
+            let candidate = cleanName(String(key[valueRange])).capitalized(with: Locale(identifier: "pt_BR"))
+            if let value = valid(candidate) { return value }
+        }
+
+        // Older alias shape: "Anete é minha mãe" / "Orlando é meu pai".
+        if target == "meu pai", key.hasSuffix(" e meu pai") {
+            if let value = valid(statement.components(separatedBy: " é ").first ?? "") { return value }
+            let raw = String(key.dropLast(" e meu pai".count)).capitalized(with: Locale(identifier: "pt_BR"))
+            return valid(raw)
+        }
+
+        if target == "minha mãe", key.hasSuffix(" e minha mae") {
+            if let value = valid(statement.components(separatedBy: " é ").first ?? "") { return value }
+            let raw = String(key.dropLast(" e minha mae".count)).capitalized(with: Locale(identifier: "pt_BR"))
+            return valid(raw)
+        }
+
+        return nil
+    }
+
+    private static func broadAnswer(target: String, profile: Profile) -> String {
+        let name = profile.names.sorted().first
+        let birth = profile.birthDates.sorted().first
+        let death = profile.deathDates.sorted().first
+
+        if target == "meu pai" {
+            var parts: [String] = []
+            if let name { parts.append("se chama \(name)") }
+            if let birth { parts.append("nasceu em \(birth)") }
+            if let death { parts.append("faleceu em \(death)") }
+            if !parts.isEmpty { return "Seu pai \(join(parts))." }
+        }
+
+        if target == "minha mãe" {
+            var parts: [String] = []
+            if let name { parts.append("se chama \(name)") }
+            if let birth { parts.append("nasceu em \(birth)") }
+            if let death { parts.append("faleceu em \(death)") }
+            if !parts.isEmpty { return "Sua mãe \(join(parts))." }
+        }
+
+        if target == "daniela" {
+            var parts: [String] = []
+            if let name { parts.append(name) }
+            if profile.relations.contains("namorada") { parts.append("é sua namorada") }
+            if profile.residence.contains(where: { XRPersistentMemory.key($0).contains("mora") || XRPersistentMemory.key($0).contains("com voce") }) {
+                parts.append("mora com você e com a Mel")
+            }
+            if !parts.isEmpty {
+                if parts.count == 1 { return "A Daniela \(parts[0])." }
+                let first = parts.removeFirst()
+                return "A \(first) \(join(parts))."
+            }
+            return "A Daniela aparece na memória como alguém relacionada à sua casa, mas ainda não tenho um perfil completo dela."
+        }
+
+        if target == "mel" {
+            if profile.relations.contains("gata") {
+                if profile.residence.isEmpty {
+                    return "A Mel é uma gata."
+                }
+                return "A Mel é uma gata que mora com você e com a Daniela."
+            }
+        }
+
+        if let note = profile.notes.first {
+            return cleanSentence(note)
+        }
+
+        return "Tenho referências salvas sobre \(display(target)), mas ainda não consegui montar um perfil limpo."
+    }
+
+    private static func ambiguity(field: String, values: Set<String>) -> String {
+        let sorted = values.sorted()
+        let options = sorted.enumerated().map { index, value in
+            "\(Character(UnicodeScalar(65 + index)!))) \(value)"
+        }.joined(separator: "\n")
+        return "Encontrei mais de uma possibilidade para \(field):\n\(options)\nQual é a correta?"
+    }
+
+    private static func hasSignal(_ profile: Profile) -> Bool {
+        !profile.names.isEmpty || !profile.birthDates.isEmpty || !profile.deathDates.isEmpty ||
+        !profile.relations.isEmpty || !profile.residence.isEmpty || !profile.notes.isEmpty
+    }
+
+    private static func mentions(target: String, key: String) -> Bool {
+        switch target {
+        case "meu pai": return key.contains("pai")
+        case "minha mãe": return key.contains("mae")
+        case "daniela": return key.contains("daniela") || key.contains("frighetto")
+        case "mel": return key.contains("mel")
+        default: return key.contains(XRPersistentMemory.key(target))
+        }
+    }
+
+    private static func asksName(_ key: String) -> Bool {
+        key.contains(" nome ") || key.hasPrefix("nome ") || key.contains(" chama") || key.contains("se chama")
+    }
+
+    private static func asksBirth(_ key: String) -> Bool {
+        key.contains(" nascimento") || key.contains(" aniversario") || key.contains(" nasceu")
+    }
+
+    private static func asksWhoOrBroad(_ key: String) -> Bool {
+        key.contains(" quem ") || key.hasPrefix("quem ") ||
+        key.contains(" sabe ") || key.contains("sobre ") ||
+        key.contains(" o que voce sabe") || key.contains("que voce sabe")
+    }
+
+    private static func absenceForName(target: String) -> String {
+        switch target {
+        case "meu pai": return "Não tenho o nome do seu pai salvo."
+        case "minha mãe": return "Não tenho o nome da sua mãe salvo."
+        case "daniela": return "Não tenho o nome completo da Daniela salvo."
+        case "mel": return "Não tenho outro nome salvo para a Mel."
+        default: return "Não tenho esse nome salvo."
+        }
+    }
+
+    private static func display(_ target: String) -> String {
+        switch target {
+        case "meu pai": return "seu pai"
+        case "minha mãe": return "sua mãe"
+        case "daniela": return "a Daniela"
+        case "mel": return "a Mel"
+        default: return target
+        }
+    }
+
+    private static func join(_ parts: [String]) -> String {
+        guard parts.count > 1 else { return parts.first ?? "" }
+        return parts.dropLast().joined(separator: ", ") + " e " + (parts.last ?? "")
+    }
+
+    private static func cleanValue(_ value: String) -> String {
+        value.replacingOccurrences(of: #"(?i)\b(?:guarde|guarda|grave|grava|salve|salva)\s+(?:isso|essa|esta|na memória|na memoria).*$"#,
+                                   with: "",
+                                   options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?\n\t"))
+    }
+
+    private static func cleanName(_ value: String) -> String {
+        cleanValue(value)
+            .replacingOccurrences(of: #"(?i)\b(?:é|e|eh)\s+(?:meu pai|minha mãe|minha mae|minha namorada|meu namorado).*$"#,
+                                   with: "",
+                                   options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?\n\t"))
+    }
+
+    private static func cleanSentence(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
