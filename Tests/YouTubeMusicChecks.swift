@@ -54,6 +54,17 @@ import Foundation
         precondition(MusicInterruption.phrase(in: "Tá bom, para.", mediaActive: true) == "TARS, pare a música")
         precondition(MusicCommand.parse("Então não toca Secretária") == nil)
         precondition(MusicCommand.parse("Play Então", mediaActive: true) == .play("Então"))
-        print("PASS: music commands, safe routing, real HTML parser")
+        for phrase in ["Fecho o YouTube", "Fecha o YouTube", "Feche o YouTube", "Para o YouTube", "TARS, stop the YouTube", "Close YouTube", "Saia do YouTube", "TARS, feche o YouTube, por favor"] {
+            precondition(MusicCommand.parse(phrase, mediaActive:true) == .stop)
+            precondition(MusicSpeechPolicy.accepts(phrase,musicActive:true))
+            precondition(MusicInterruption.phrase(in:phrase,mediaActive:true) == "TARS, pare a música")
+        }
+        precondition(MusicCommand.parse("Volta pra conversa",mediaActive:true) == .stop)
+        for phrase in ["Não fecha o YouTube", "Don't stop the YouTube", "Como fechar o YouTube?", "Toca Stop the YouTube"] {
+            precondition(MusicCommand.parse(phrase,mediaActive:true) != .stop)
+        }
+        precondition(MusicSpeechPolicy.accepts("Além de mim, com quem ela mora?",musicActive:false))
+        precondition(!MusicSpeechPolicy.accepts("trecho da música",musicActive:true))
+        print("PASS: music commands, natural YouTube exits, negation, paused conversation and real HTML parser")
     }
 }

@@ -149,6 +149,7 @@ final class TarsHUDViewModel: ObservableObject {
             virtualSimulator = false
             logLine = connectionMessage
             systemRows = [("CORE", "OFFLINE"), ("ESP32", "UNAVAILABLE"), ("SAFETY", "UNKNOWN")]
+            systemRows += visionSystemRows
             sensorRows = ["FRONT", "LEFT", "RIGHT", "REAR", "HEADING"].map { ($0, "N/A") }
             computeRows = [("NET", "N/A")]
         }
@@ -219,6 +220,9 @@ final class TarsHUDViewModel: ObservableObject {
             )
         }
 
+        systemRows.removeAll { $0.0 == "VISION" || $0.0 == "CAMERA" }
+        systemRows += visionSystemRows
+
         sensorRows = [
             "front",
             "left",
@@ -235,10 +239,16 @@ final class TarsHUDViewModel: ObservableObject {
             : "N/A"
 
         computeRows = [
+            ("VISION FRAME", SequentialVision.shared.frameStatus),
             ("XR BAT", battery),
             ("THERMAL", ProcessInfo.processInfo.thermalState.label),
             ("NET", String(format: "%.0f ms", latencyMS))
         ]
+    }
+
+    private var visionSystemRows: [(String, String)] {
+        [("VISION", SequentialVision.shared.active ? "SEQUENTIAL_LOCAL" : "REFERENCE"),
+         ("CAMERA", SequentialVision.shared.state)]
     }
 
     private func display(_ f: HUDField?) -> String {

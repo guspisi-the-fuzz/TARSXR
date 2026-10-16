@@ -115,11 +115,37 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
                 return "O YouTube ainda não confirmou o reinício da música."
             } catch { return "Não consegui reiniciar o vídeo agora." }
         case .stop:
-            generation = UUID(); titleRequestedAt = nil
+            generation = UUID(); titleRequestedAt = nil; playbackState = -1; errorMessage = nil
             webView.loadHTMLString("", baseURL: nil); track = nil; isPlaying = false; status = ""
             return "Música encerrada."
         }
     }
+
+    #if DEBUG
+    /// Real command dispatch/player lifecycle with a local fixture, no YouTube request or microphone.
+    static func runExitChecks() async -> String {
+        let player = YouTubeMusicPlayer()
+        let phrases = ["Fecho o YouTube", "Para o YouTube", "Stop the YouTube", "TARS, fecha o YouTube", "Volta pra conversa"]
+        for phrase in phrases {
+            player.track = YouTubeTrack(id:"abcdefghijk",title:"Local fixture")
+            player.isPlaying = true; player.playbackState = 1
+            player.titleRequestedAt = Date(); player.errorMessage = "old error"
+            let previous = player.generation
+            guard let command = player.command(for:phrase), command == .stop else { return "FAIL: exit not routed" }
+            _ = await player.handle(command)
+            guard player.track == nil, !player.isPlaying, player.status.isEmpty,
+                  player.titleRequestedAt == nil, player.playbackState == -1,
+                  player.errorMessage == nil, player.generation != previous else { return "FAIL: player retained state" }
+            guard player.command(for:"Quem é a gata?") == nil,
+                  MusicSpeechPolicy.accepts("Além de mim, com quem ela mora?",musicActive:player.isPlaying) else { return "FAIL: conversation blocked after exit" }
+        }
+        player.track = YouTubeTrack(id:"abcdefghijk",title:"Paused fixture")
+        player.isPlaying = false
+        guard MusicSpeechPolicy.accepts("Quem é a gata?",musicActive:player.isPlaying) else { return "FAIL: paused player blocks conversation" }
+        _ = await player.handle(.stop)
+        return "PASS: 5 natural exits through actual player; track cleared (window condition false), generation cancelled, title prompt cleared, paused/exited conversation enabled; no network/audio"
+    }
+    #endif
 
     func pauseForBackground() {
         webView.evaluateJavaScript("if(window.player) player.pauseVideo()", completionHandler: nil)

@@ -13,6 +13,9 @@ enum MusicCommand: Equatable {
         // Strip conversational lead-ins, preserving song titles and negations.
         text = text.replacingOccurrences(of: #"(?i)^(?:(?:ent[aã]o|t[aá] bom|okay|ok|por favor)[,\s]+)+"#, with: "", options: .regularExpression)
         let normalized = text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "pt_BR")).lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
+        // Explicit player exit is distinct from pausing a track. Anchored forms preserve negation.
+        if normalized.range(of: #"^(?:(?:fecha|feche|fecho|fechar|encerra|encerre|para|pare|parar|sai|saia|sair)\s+(?:(?:o|do)\s+)?you\s*tube|(?:close|stop|exit|quit)\s+(?:(?:the|from)\s+)?you\s*tube)(?:,?\s+(?:por favor|please))?$"#, options: .regularExpression) != nil { return .stop }
+        if mediaActive && normalized.range(of: #"^(?:volta|volte|voltar)\s+(?:pra|para a|a)\s+conversa$"#, options: .regularExpression) != nil { return .stop }
         if mediaActive {
             if ["pause", "pausa", "pausar"].contains(normalized) { return .pause }
             if ["play", "start", "continue", "continua", "resume"].contains(normalized) { return .resume }

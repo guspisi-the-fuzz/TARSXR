@@ -1,3 +1,4 @@
+// TARS_CAMERA_TIMING_V1
 import SwiftUI
 import UIKit
 import AVFoundation
@@ -398,6 +399,8 @@ struct VoiceCameraCommand: Equatable {
 @MainActor
 enum VoiceCameraAction {
     static func captureAndDescribe(command: VoiceCameraCommand, model: TarsHUDViewModel) async throws -> String {
+        try await SequentialVision.shared.prepareStill()
+        defer { SequentialVision.shared.finishStill() }
         let image = try await VoiceStillCamera.capture(position: command.position)
 
         switch command.kind {
@@ -458,11 +461,20 @@ final class VoiceStillCamera: NSObject, AVCapturePhotoCaptureDelegate {
                 self.continuation = continuation
                 self.queue.async {
                     do {
-                        try self.configure()
-                        self.session.startRunning()
+                        print("[TARS_CAMERA] configure BEGIN", ProcessInfo.processInfo.systemUptime)
+try self.configure()
+print("[TARS_CAMERA] configure END", ProcessInfo.processInfo.systemUptime)
+                        print("[TARS_CAMERA] startRunning BEGIN", ProcessInfo.processInfo.systemUptime)
+self.session.startRunning()
+print("[TARS_CAMERA] startRunning END", ProcessInfo.processInfo.systemUptime)
                         guard self.session.isRunning else { throw VoiceCameraError.captureFailed }
                         let settings = AVCapturePhotoSettings()
-                        self.output.capturePhoto(with: settings, delegate: self)
+                        print("[TARS_CAMERA] capturePhoto BEGIN", ProcessInfo.processInfo.systemUptime)
+self.output.capturePhoto(with: settings, delegate: self)
+print("[TARS_CAMERA] capturePhoto END", ProcessInfo.processInfo.systemUptime)
+                        self.queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+                            self?.complete(.failure(VoiceCameraError.captureFailed))
+                        }
                     } catch {
                         self.complete(.failure(error))
                     }
@@ -514,7 +526,9 @@ final class VoiceStillCamera: NSObject, AVCapturePhotoCaptureDelegate {
         queue.async {
             guard !self.finished else { return }
             self.finished = true
-            if self.session.isRunning { self.session.stopRunning() }
+            print("[TARS_CAMERA] stopRunning BEGIN", ProcessInfo.processInfo.systemUptime)
+if self.session.isRunning { self.session.stopRunning() }
+print("[TARS_CAMERA] stopRunning END", ProcessInfo.processInfo.systemUptime)
 
             DispatchQueue.main.async {
                 guard let continuation = self.continuation else { return }

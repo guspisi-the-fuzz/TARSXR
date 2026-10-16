@@ -35,13 +35,17 @@ build_ios() {
   grep -F '** BUILD SUCCEEDED **' "$OUT/$label.log" || return 1
 }
 if [[ "$(uname -s)" == Darwin ]]; then build_ios Debug 'iOS Simulator' debug-before-tests; fi
+run_check frame-quality MyApp/FrameQuality.swift Tests/FrameQualityChecks.swift
+run_check video-frame-gate MyApp/SequentialSessionCamera.swift Tests/VideoFrameGateChecks.swift
+run_check sequential-vision MyApp/SequentialVisionPolicy.swift Tests/SequentialVisionChecks.swift
 run_check spoken-request Tests/SpokenRequestChecks.swift
 run_check logic MyApp/XRLogic.swift Tests/XRLogicChecks.swift
 run_check memory-reasoner MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift Tests/XRMemoryReasonerChecks.swift
 if [[ "$(uname -s)" == Darwin ]]; then
   run_check native-core MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/NativePublicLookup.swift MyApp/NativeAIKeychain.swift MyApp/XRLogic.swift MyApp/NativeAIService.swift MyApp/NativeAIRuntime.swift MyApp/NativeBodyCore.swift Tests/NativeCoreChecks.swift
+  run_check memory-dialogue MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift MyApp/NativeAIService.swift Tests/XRMemoryDialogueChecks.swift
   run_check native-ai MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRLogic.swift MyApp/NativeAIService.swift Tests/NativeAIChecks.swift
-  run_check native-weather MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/MigratingTARSRuntime.swift Tests/NativeWeatherChecks.swift
+  run_check native-weather MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/MigratingTARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/NativeWeatherChecks.swift
 run_check spoken-repair MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/NativePublicLookup.swift Tests/SpokenRepairChecks.swift
 fi
 run_check mail-command MyApp/MailCommand.swift Tests/MailCommandChecks.swift

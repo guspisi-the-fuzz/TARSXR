@@ -33,6 +33,8 @@ final class MemoryTARSRuntime: TARSRuntime {
         #endif
     }
 
+    private let prepareConversation: (@MainActor (String) -> Void)?
+    private let observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)?
     private let logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)?
     private let underlying: any TARSRuntime
     private let memory: @MainActor () throws -> XRPersistentMemory
@@ -51,7 +53,11 @@ final class MemoryTARSRuntime: TARSRuntime {
          memory: @escaping @MainActor () throws -> XRPersistentMemory = { try XRPersistentMemory.deviceStore() },
          uptime: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
          pendingState: XRMemoryPendingState? = nil,
-         logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil) {
+         logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil,
+         observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)? = nil,
+         prepareConversation: (@MainActor (String) -> Void)? = nil) {
+        self.prepareConversation = prepareConversation
+        self.observeRecall = observeRecall
         self.logicalRecall = logicalRecall
         self.underlying = underlying; self.memory = memory; self.uptime = uptime
         self.pendingState = pendingState ?? .shared
@@ -121,6 +127,20 @@ final class MemoryTARSRuntime: TARSRuntime {
     }
 
     func converse(text: String, language: String, context: [String: Any]?) async throws -> String {
+        prepareConversation?(text)
+        let before = try? storage().load()
+        let answer = try await converseImpl(text:text, language:language, context:context)
+        try Task.checkCancellation()
+        if context?["internal_wake_summary"] as? Bool != true,
+           !SpokenRequest.isServiceQuery(text), XRMemoryIntent.isQuestionLike(text),
+           let before, let after = try? storage().load(),
+           before.ownerID == after.ownerID, before.revision == after.revision {
+            observeRecall?(text,answer,after)
+        }
+        return answer
+    }
+
+    private func converseImpl(text: String, language: String, context: [String: Any]?) async throws -> String {
         try Task.checkCancellation()
         let english = XRMemoryIntent.english(text)
         let store: XRPersistentMemory
@@ -1174,12 +1194,16 @@ final class MemoryTARSRuntime: TARSRuntime {
     }
     func transcribe(data: Data) async throws -> String { try await underlying.transcribe(data: data) }
     func synthesize(text: String) async throws -> Data { try await underlying.synthesize(text: text) }
-    // These diagnostic paths remain delegated. Normal voice streaming remains disabled.
+    // Audio output remains delegated; conversation routing always passes through memory.
     func streamSpeech(text: String, receive: @escaping @MainActor (Data) throws -> Void) async throws {
         try await underlying.streamSpeech(text: text, receive: receive)
     }
     func streamConversation(text: String, receive: @escaping @MainActor (Data) throws -> Void, receiveText: @escaping @MainActor (String) -> Void) async throws {
-        try await underlying.streamConversation(text: text, receive: receive, receiveText: receiveText)
+        // Use the same memory/topic routing for both voice output paths.
+        let speech = try await converse(text:text, language:"auto", context:nil)
+        try Task.checkCancellation()
+        receiveText(speech)
+        try await underlying.streamSpeech(text:speech, receive:receive)
     }
 }
 
@@ -1503,7 +1527,13 @@ private enum XRMemoryProfileResolverV1 {
             guard let match = regex.firstMatch(in: statement, range: range),
                   match.numberOfRanges > 1,
                   let valueRange = Range(match.range(at: 1), in: statement) else { continue }
-            return cleanValue(String(statement[valueRange]))
+            let value = cleanValue(String(statement[valueRange]))
+            // Legacy statements may repeat a date with "dia" or a possessive prefix.
+            // Compare the actual date instead of treating the surrounding prose as data.
+            if let dateRange = value.range(of: #"\b\d{1,2}\s+de\s+[\p{L}]+\s+de\s+\d{4}\b"#, options:.regularExpression) {
+                return String(value[dateRange]).lowercased()
+            }
+            return value
         }
         return nil
     }

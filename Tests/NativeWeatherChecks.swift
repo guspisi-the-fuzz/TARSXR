@@ -37,6 +37,44 @@ import Foundation
         }
         precondition(NativeWeatherLookup.location("Ribeirão Preto estado de São Paulo").0 == "Ribeirão Preto")
         precondition(NativeWeatherLookup.location("Americana, SP").1 == "São Paulo")
+        for phrase in [
+            "Qual é a previsão do tempo para Altinópolis, estado de São Paulo?",
+            "Qual a previsão do tempo para Altinópolis, São Paulo",
+            "Qual é a previsão do tempo no estado de São Paulo para Altinópolis?",
+            "Altinópolis, São Paulo. Qual a previsão do tempo?",
+            "Qual a previsão do tempo em Altinópolis, estado de São Paulo?"
+        ] {
+            let reply = await service.answer(phrase)
+            precondition(reply?.contains("Em Altinópolis, São Paulo") == true)
+            let geo = calls.last { $0.host == "geocoding-api.open-meteo.com" }!
+            let name = URLComponents(url:geo,resolvingAgainstBaseURL:false)!.queryItems!.first { $0.name == "name" }!.value!
+            precondition(name == "Altinópolis", "Only city name may reach geocoder")
+        }
+        _ = await service.answer("cancela")
+        _ = await service.answer("Qual a previsão do tempo?")
+        let withPreposition = await service.answer("Em Altinópolis, estado de São Paulo.")
+        precondition(withPreposition?.contains("Em Altinópolis, São Paulo") == true)
+        var failedLookups = 0
+        let unresolved = NativeWeatherLookup(now:{stamp},zone:zone) { _ in failedLookups += 1; return [:] }
+        for unrelated in ["Quem é a Mel?", "É a Mel?", "Em que ano ele nasceu?", "Qual é o nome do meu pai?", "Sai dessa, irmão. Eu tô te perguntando quem é a Mel."] {
+            _ = await unresolved.answer("Qual a previsão do tempo em Lugar Inexistente?")
+            let count = failedLookups
+            let unrelatedAnswer = await unresolved.answer(unrelated)
+            precondition(unrelatedAnswer == nil)
+            precondition(failedLookups == count, "Personal question must never reach geocoder")
+            let abandoned = await unresolved.answer("Altinópolis, São Paulo")
+            precondition(abandoned == nil, "Topic change must cancel pending city")
+        }
+        let fixtureRoot=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:fixtureRoot) }
+        let memory=XRPersistentMemory(url:fixtureRoot.appendingPathComponent("memory.json"))
+        _=try memory.save(subject:"Luma",statement:"Luma é uma gata",correction:false)
+        let topicRuntime=MemoryTARSRuntime(underlying:UnavailableMac(),memory:{memory},prepareConversation:{ unresolved.observeInput($0) })
+        _=await unresolved.answer("Qual a previsão do tempo?")
+        let local=try await topicRuntime.converse(text:"Quem é a Luma?",language:"pt",context:nil)
+        precondition(local.contains("Luma"))
+        let staleCity=await unresolved.answer("Altinópolis, São Paulo")
+        precondition(staleCity == nil, "Local memory must cancel pending weather without network")
         let mac = UnavailableMac()
         let runtime = MigratingTARSRuntime(remaining: mac, weather: service)
         let average = try await runtime.converse(text: "Qual a temperatura média amanhã em Altinópolis, estado de São Paulo?", language:"pt-BR", context:nil)
@@ -84,6 +122,13 @@ import Foundation
         do { _ = try await runtime.converse(text:"Quem é a Daniela?", language:"pt", context:nil); preconditionFailure() } catch TARSClientError.unavailable {}
         precondition(mac.conversations == 1)
         precondition(calls.allSatisfy { $0.scheme == "https" && ["api.open-meteo.com","geocoding-api.open-meteo.com"].contains($0.host!) })
+        if ProcessInfo.processInfo.environment["TARS_TEST_LIVE_WEATHER"] == "1" {
+            let live=NativeWeatherLookup()
+            let speech=await live.answer("Qual é a previsão do tempo no estado de São Paulo para Altinópolis?")
+            precondition(speech?.contains("Em Altinópolis, São Paulo") == true)
+            precondition(speech?.contains("previsão da Open-Meteo") == true)
+            print("PASS: live geocoding and forecast for public city Altinópolis/SP")
+        }
         print("PASS: native weather, real hourly mean, current/stale values, dates, city clarification/expiry, no remote Core lookup, unchanged motion delegation")
     }
 }

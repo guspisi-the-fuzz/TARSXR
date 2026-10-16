@@ -37,6 +37,7 @@ enum XRMemoryIntent: Equatable {
     nonisolated static func isQuestionLike(_ raw: String) -> Bool {
         let text = commandText(raw).trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasSuffix("?") { return true }
+        if captures(#"^(?:em|de)\s+que\s+(?:ano|dia|data|cidade|lugar)\b"#, in: text) != nil { return true }
         if captures(#"\b(?:qual|quais|quem|quando|onde|quanto|what|who|when|where)\b"#, in: text) != nil { return true }
         return captures(#"(?i)(?:^|[.!?]\s*)(?:que\s+(?:dia|data|horas)|quem|qual|quais|quando|onde|como|por\s+que|porque|o\s+que|who|what|when|where|how|why)\b"#, in: text) != nil
     }

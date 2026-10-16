@@ -55,6 +55,17 @@ import Foundation
         }
         let predicateResult=try await predicateRepair.answer("Who?",document:doc)
         precondition(predicateCalls == 2 && predicateResult?.contains("entity-a") == true)
+        var ambiguousCalls=0
+        let clarify=XRMemoryReasoner { payload in
+            ambiguousCalls += 1
+            let json=try JSONSerialization.jsonObject(with:Data(payload.utf8)) as! [String:Any]
+            let exchanges=json["recent_exchanges"] as! [[String:String]]
+            precondition(exchanges.first?["answer"] == "entity-a lives with entity-b")
+            return XRLogic.Plan(intent:ambiguousCalls==1 ? "ambiguous" : "query",facts:[.init(relation:"lives",terms:["entity-a","entity-b"],negative:false,source:"f1")],query:query)
+        }
+        clarify.observe("Who is entity-a?",answer:"entity-a lives with entity-b",document:doc)
+        let clarified=try await clarify.answer("Who lives there?",document:doc)
+        precondition(ambiguousCalls==2 && clarified?.contains("entity-a")==true)
         precondition(doc.facts == [source])
         print("PASS: synthetic interpreter contract, cited sources, invented-entity rejection, context isolation/revision reset; no writes or API")
     }

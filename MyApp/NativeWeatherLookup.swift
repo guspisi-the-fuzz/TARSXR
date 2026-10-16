@@ -27,6 +27,7 @@ import CoreFoundation
         "Acre|Alagoas|Amapá|Amazonas|Bahia|Ceará|Distrito Federal|Espírito Santo|Goiás|Maranhão|Mato Grosso|Mato Grosso do Sul|Minas Gerais|Pará|Paraíba|Paraná|Pernambuco|Piauí|Rio de Janeiro|Rio Grande do Norte|Rio Grande do Sul|Rondônia|Roraima|Santa Catarina|São Paulo|Sergipe|Tocantins".split(separator: "|").map(String.init)))
     static func location(_ text: String) -> (String, String?) {
         let clean = text.trimmingCharacters(in: CharacterSet(charactersIn: " ?!.,;"))
+            .replacingOccurrences(of: #"(?i)^(?:em|na cidade de|no municipio de)\s+"#, with:"", options:.regularExpression)
         let parts = clean.components(separatedBy: ",")
         if parts.count > 1 {
             let region = normalize(parts.dropFirst().joined(separator: ",")).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: #"^(no estado de|estado de|estado do)\s+"#, with: "", options: .regularExpression)
@@ -49,6 +50,22 @@ import CoreFoundation
               let range = Range(match.range(at: 1), in: text) else { return nil }
         return String(text[range])
     }
+    /// A clarification accepts a location, never an arbitrary next utterance.
+    static func isLocationReply(_ text:String) -> Bool {
+        let n = normalize(text)
+        return (2...100).contains(text.count) && matches(text, #"^[\p{L} ,.-]+[?!.]?$"#)
+            && !matches(n, #"\b(quem|que|qual|quais|como|quando|quanto|onde|porque|por que|nasceu|nascimento|aniversario|ele|ela|eles|elas|meu|minha|comigo|quero|entendi|fala|voce|sim|what|who|when|where|how|why|the|is|my|he|she|e a|e o)\b"#)
+    }
+    static func requestedLocation(_ text:String) -> String {
+        // State-before-city and city-before-question are both common spoken forms.
+        if let state = capture(text, #"\bestado\s+(?:de|do)\s+(.+?)\s+(?:para|em)\s+"#),
+           let city = capture(text, #"\bestado\s+(?:de|do)\s+.+?\s+(?:para|em)\s+(.+)"#) {
+            return city.trimmingCharacters(in:CharacterSet(charactersIn:" ?!.,;")) + ", " + state
+        }
+        if let prefix = capture(text, #"^(.+?)[.!?]\s*(?:qual|como|vai|previs[aã]o|temperatura)\b"#), isLocationReply(prefix) { return prefix }
+        return capture(text, #"\b(?:em|na cidade de|para a cidade de)\s+(.+)"#)
+            ?? capture(text, #"\b(?:tempo|clima|temperatura)\s+(?:de|para)\s+(.+)"#) ?? ""
+    }
     private func formatter(_ format: String, zone: TimeZone? = nil) -> DateFormatter {
         let f = DateFormatter(); f.locale = Locale(identifier: "pt_BR"); f.calendar = Calendar(identifier: .gregorian)
         f.timeZone = zone ?? self.zone; f.dateFormat = format; f.isLenient = false; return f
@@ -70,8 +87,14 @@ import CoreFoundation
         guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite, (min...max).contains(n.doubleValue) else { throw Failure.invalid }
         return n.doubleValue
     }
+    /// Called even when a local memory answer bypasses this service.
+    func observeInput(_ raw:String) {
+        let text = SpokenRequest.clean(raw)
+        if !Self.isWeather(text) && !Self.isLocationReply(text) { pending = nil; recent = nil }
+    }
     func answer(_ raw: String) async -> String? {
         var text = SpokenRequest.clean(raw)
+        var explicitCity: String?
         let normalized = Self.normalize(text)
         if Self.matches(normalized, #"^(never mind|nevermind|esquece|deixa pra la|cancela|cancelar|cancel|para|pare|stop|nao)([ !.,?].*)?$"#) {
             pending = nil; recent = nil
@@ -84,12 +107,11 @@ import CoreFoundation
         if !Self.isWeather(text) {
             let followCity = Self.capture(text, #"^e\s+(?:em|na cidade de)\s+(.+)"#)
             let candidate = followCity ?? text
-            let looksLikeCity = candidate.count < 100 && Self.matches(candidate, #"^[\p{L} ,.-]+[?!.]?$"#)
-                && !Self.matches(Self.normalize(candidate), #"\b(qual|como|quero|entendi|fala|me|voce|sim|what|the|is|my)\b"#)
+            let looksLikeCity = Self.isLocationReply(candidate)
             if let old = recent, let city = followCity, looksLikeCity {
-                text = old.query + " em " + city
+                text = old.query; explicitCity = city
             } else if let p = pending, looksLikeCity {
-                text = p.text + " em " + candidate
+                text = p.text; explicitCity = candidate
             } else { pending = nil; recent = nil; return nil }
         }
         let n = Self.normalize(text)
@@ -107,7 +129,7 @@ import CoreFoundation
             return "Diga o dia da previsão: hoje, amanhã ou uma data como 8 de outubro."
         }
         guard let distance = calendar.dateComponents([.day], from: today, to: day).day, (0..<16).contains(distance) else { return "Consigo consultar a previsão de hoje até os próximos quinze dias. Qual data você quer?" }
-        let found = Self.capture(text, #"\b(?:em|na cidade de|para a cidade de)\s+(.+)"#) ?? Self.capture(text, #"\b(?:tempo|clima|temperatura)\s+(?:de|para)\s+(.+)"#) ?? ""
+        let found = explicitCity ?? Self.requestedLocation(text)
         var city = found.replacingOccurrences(of: #"(?i)\b(?:agora|neste momento|atualmente|hoje|amanh[ãa]|depois de amanh[ãa]|ontem|no dia|dia \d|por favor|por gentileza|vai chover|qual|como|ser[aá]|previs[aã]o do tempo)\b.*|\d{1,2}/\d{1,2}.*"#, with: "", options: .regularExpression).trimmingCharacters(in: CharacterSet(charactersIn: " ?!.,;"))
         if city.isEmpty || ["la", "ai", "nessa cidade", "nesta cidade"].contains(Self.normalize(city)) {
             if let old = recent { city = old.city }

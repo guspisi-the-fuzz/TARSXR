@@ -46,11 +46,12 @@ struct TarsHUDView: View {
                         .onDisappear { music.visible = false; music.pauseForBackground() }
                     Text(music.status).font(.caption).lineLimit(2)
                 }
+                SequentialVisionControls(vision: .shared, model: model)
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
                 #if DEBUG
                 if ProcessInfo.processInfo.environment["TARS_VISION_TEST"] == "1" {
-                    Button("Teste de visão") { showsVision = true }
+                    Button("Teste de visão") { SequentialVision.shared.stop(); showsVision = true }
                         .buttonStyle(.bordered).tint(.cyan)
                 }
                 #endif
@@ -96,6 +97,11 @@ struct TarsHUDView: View {
         #endif
         .task {
             #if DEBUG
+            if ProcessInfo.processInfo.environment["TARS_YOUTUBE_EXIT_CHECKS"] == "1" {
+                let result = await YouTubeMusicPlayer.runExitChecks()
+                try? result.write(to: URL.documentsDirectory.appendingPathComponent("youtube-exit-checks.txt"), atomically: true, encoding: .utf8)
+                return
+            }
             if ProcessInfo.processInfo.environment["TARS_NATIVE_AI_PROBE"] == "1" {
                 let result=await NativeAIProbe.run()
                 try? result.write(to:URL.documentsDirectory.appendingPathComponent("native-ai-probe.txt"),atomically:true,encoding:.utf8)
@@ -205,7 +211,7 @@ struct TarsHUDView: View {
             audio.transcribe = { data in try await model.transcribe(data: data) }
             music.onMediaSessionConfirmed = { audio.resumeAfterMediaSession() }
             audio.mediaInterruptionPhrase = { text in MusicInterruption.phrase(in: text, mediaActive: music.track != nil) }
-            audio.acceptsMediaSpeech = { text in MusicSpeechPolicy.accepts(text, musicActive: music.track != nil) }
+            audio.acceptsMediaSpeech = { text in MusicSpeechPolicy.accepts(text, musicActive: music.isPlaying) }
             audio.keepsMediaSessionActive = { music.track != nil }
             audio.handlesLocally = { text in music.command(for: text) != nil || MailCommand.parse(text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
             audio.respond = { text, language in
@@ -232,7 +238,7 @@ struct TarsHUDView: View {
             await model.run()
         }
         .task(id: scenePhase) {
-            guard ProcessInfo.processInfo.environment["TARS_YOUTUBE_PROBE"] == nil, !showsVision, !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
+            guard ProcessInfo.processInfo.environment["TARS_YOUTUBE_EXIT_CHECKS"] != "1", ProcessInfo.processInfo.environment["TARS_YOUTUBE_PROBE"] == nil, !showsVision, !manualDiagnostics, !simulatedVoiceChecks, ProcessInfo.processInfo.environment["TARS_PAUSE_VOICE"] != "1", ProcessInfo.processInfo.environment["TARS_VISION_CHECKS"] != "1" else { return }
             if scenePhase == .active {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
@@ -241,9 +247,10 @@ struct TarsHUDView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase != .active { SequentialVision.shared.stop("APP_INACTIVE") }
             if manualDiagnostics && phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
         }
-        .onDisappear { audio.suspendHandsFree() }
+        .onDisappear { audio.suspendHandsFree(); SequentialVision.shared.stop() }
     }
 }
 
