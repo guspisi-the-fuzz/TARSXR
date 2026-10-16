@@ -60,7 +60,7 @@ import AVFoundation
                     do {
                         let image = try await captureCamera.capture()
                         guard token == generation, active, !Task.isCancelled else { policy.finish(); return }
-                        guard let normalized = ReferencePhoto.normalize(image), let signature = Self.signature(normalized.image) else { throw VoiceCameraError.invalidImage }
+                        guard let normalized = (ReferencePhoto.normalize(image, maximumDimension: 640) ?? ReferencePhoto.normalize(image)), let signature = Self.signature(normalized.image) else { throw VoiceCameraError.invalidImage }
                         lastFrame = Date()
                         quality = Self.assessQuality(normalized.image)
                         if quality?.accepted == true {
@@ -120,6 +120,13 @@ import AVFoundation
     }
     /// Shared button/voice path. No still capture and no implicit activation.
     func answerCurrent(question: String, using model: TarsHUDViewModel) async throws -> String {
+        let captured = descriptionAvailability == .ready ? frame?.time : nil
+        let answer = try await analyzeCurrent(question: question, using: model)
+        try Task.checkCancellation()
+        model.recordLocalExchange(question: question, answer: answer, source: .camera, capturedAt: captured)
+        return answer
+    }
+    private func analyzeCurrent(question: String, using model: TarsHUDViewModel) async throws -> String {
         try Task.checkCancellation()
         let availability = descriptionAvailability
         guard availability == .ready, let frame else {

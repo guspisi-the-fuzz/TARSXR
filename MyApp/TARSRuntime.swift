@@ -82,6 +82,7 @@ enum TARSClientError: LocalizedError {
 /// The production implementation remains remote until an embedded runtime is validated.
 @MainActor
 protocol TARSRuntime: AnyObject {
+    func recordLocalExchange(question: String, answer: String, source: ConversationContext.Source, capturedAt: Double?)
     func hud() async throws -> HUDSnapshot
     func command(_ action: String, params: TARSCommandParameters?) async throws -> TARSCommandReply
     func telemetry() async throws -> TARSTelemetry
@@ -95,6 +96,7 @@ protocol TARSRuntime: AnyObject {
 }
 
 extension TARSRuntime {
+    func recordLocalExchange(question: String, answer: String, source: ConversationContext.Source, capturedAt: Double? = nil) {}
     func command(_ action: String) async throws -> TARSCommandReply {
         try await command(action, params: nil)
     }

@@ -34,6 +34,7 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
         }
         #endif
     }
+    private let continuousConversation = ProcessInfo.processInfo.environment["TARS_CONVERSATION_AUDIO"] != "legacy"
     private let engine = AVAudioEngine()
     private let speaker = AVSpeechSynthesizer()
     // The early conversation path must not bypass the streaming containment.
@@ -50,6 +51,10 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var voiceSource = "Voz sintetizada local"
     private var speechTask: Task<Void, Never>?
     private var audioPlayer: AVAudioPlayer?
+    @Published private(set) var interruptionAvailable = false
+    private var interruptionToken = UUID()
+    private var interruptionDeadline: Task<Void, Never>?
+    private var partCompletion: CheckedContinuation<Void, Error>?
     private var language = "pt-BR"
     // Explicitly enabled only after consent to online wake transcription.
     private let onlineWake = ProcessInfo.processInfo.environment["TARS_ONLINE_WAKE"] == "1"
@@ -219,7 +224,12 @@ private let bluetooth = BluetoothManager()
         #endif
         state = "AUTHORIZING"
         message = "Aguardando permissão de microfone e reconhecimento."
-        if useAI && (!handsFree || onlineWake) {
+        // An awake conversation can consume incremental on-device recognition
+        // directly when selected. Preserve explicitly selected multilingual online
+        // recognition by default; never silently replace it with a fixed PT locale.
+        let localRecognizer = SFSpeechRecognizer(locale: Locale(identifier: language))
+        let localConversation = continuousConversation && ProcessInfo.processInfo.environment["TARS_PREFER_LOCAL_STT"] == "1" && handsFree && voicePolicy.awake && SFSpeechRecognizer.authorizationStatus() == .authorized && localRecognizer?.isAvailable == true && localRecognizer?.supportsOnDeviceRecognition == true
+        if useAI && (!handsFree || (onlineWake && !localConversation)) {
             let mic = await AVAudioApplication.requestRecordPermission()
             guard id == generation else { return }
             guard mic else { handsFree = false; fail("Permita o microfone nos Ajustes."); return }
@@ -268,7 +278,7 @@ private let bluetooth = BluetoothManager()
             req.requiresOnDeviceRecognition = handsFree
             req.contextualStrings = ["TARS", "TARS pause", "TARS pausa", "TARS pare a música", "TARS stop", "TARS continua com a música", "TARS play the music", "TARS pause the music"]
             request = req
-            transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
+            transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime, silenceSeconds: continuousConversation ? 1.2 : 2.2)
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 req.append(buffer)
                 let amplitude = Self.amplitude(buffer)
@@ -291,6 +301,7 @@ private let bluetooth = BluetoothManager()
                 Task { @MainActor in
                     guard let self, self.generation == id, self.state == "LISTENING" else { return }
                     if let text {
+                        if text != self.transcript { self.captureWindow.observeVoice(now: ProcessInfo.processInfo.systemUptime) }
                         self.transcript = text
                         if let command = self.mediaInterruptionPhrase?(text) {
                             self.transcript = command
@@ -369,7 +380,7 @@ private let bluetooth = BluetoothManager()
             recording.isMeteringEnabled = true
             guard recording.record() else { fail("Não foi possível abrir o microfone."); return }
             inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
-            transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
+            transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime, silenceSeconds: continuousConversation ? 1.2 : 2.2)
             state = "LISTENING"; status = "LISTENING"
             if voiceProgress.isEmpty { voiceProgress = "Capturando áudio; faça uma pausa ao terminar." }
             let followUp = visualRespond != nil || voicePolicy.acceptsFollowUp()
@@ -459,6 +470,7 @@ private let bluetooth = BluetoothManager()
                 self.transcript = request
                 self.state = "THINKING"; self.status = "THINKING"
                 self.message = "TARS está pensando…"
+                self.beginInterruptionListening()
                 self.voiceProgress = "Pergunta reconhecida; aguardando resposta da IA."
                 #if DEBUG
                 let answerStarted = ProcessInfo.processInfo.systemUptime
@@ -498,6 +510,8 @@ private let bluetooth = BluetoothManager()
     }
 
     private func stopCapture() {
+        interruptionToken = UUID(); interruptionAvailable = false
+        interruptionDeadline?.cancel(); interruptionDeadline = nil
         generation = UUID(); timeout?.cancel(); timeout = nil
         recorder?.stop(); recorder = nil
         if let recordingURL { try? FileManager.default.removeItem(at: recordingURL) }
@@ -526,6 +540,7 @@ private let bluetooth = BluetoothManager()
             let id = generation
             state = "THINKING"; status = "THINKING"
             message = "TARS está pensando…"
+            beginInterruptionListening()
             conversationTask = Task { [weak self] in
                 guard let self, !Task.isCancelled, self.generation == id else { return }
                 do {
@@ -595,15 +610,16 @@ private let bluetooth = BluetoothManager()
             cancel(message: "Aguardando TARS / Waiting for TARS")
             return nil
         case .acknowledge:
+            state = "THINKING"; status = "THINKING"
             voiceProgress = "TARS reconhecido; verificando estado interno."
             let id = generation
-
-            Task { [weak self] in
+            beginInterruptionListening()
+            conversationTask = Task { [weak self] in
                 guard let self, !Task.isCancelled, self.generation == id else { return }
 
                 do {
-                    guard let wakeRespond = self.wakeRespond ?? respond else {
-                        self.speak("Online. Ready to assist.")
+                    guard let wakeRespond = self.wakeRespond else {
+                        self.speak(self.language.hasPrefix("en") ? "I am here. How can I help?" : "Estou aqui. Como posso ajudar?")
                         return
                     }
 
@@ -616,7 +632,7 @@ private let bluetooth = BluetoothManager()
                     self.speak(summary)
                 } catch {
                     guard !Task.isCancelled, self.generation == id else { return }
-                    self.speak("Online. Ready to assist.")
+                    self.speak(self.language.hasPrefix("en") ? "I am here. How can I help?" : "Estou aqui. Como posso ajudar?")
                 }
             }
 
@@ -686,32 +702,12 @@ private let bluetooth = BluetoothManager()
         speechTask = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == id else { return }
             do {
-                #if DEBUG
-                let synthesisStarted = ProcessInfo.processInfo.systemUptime
-                #endif
-                let data = try await synthesize(text)
+                try await PreparedVoicePipeline.run(text: text, segmented: self.continuousConversation, synthesize: synthesize) { [weak self] data in
+                    guard let self, self.generation == id else { throw CancellationError() }
+                    try await self.playApprovedPart(data, id: id)
+                }
                 guard !Task.isCancelled, self.generation == id else { return }
-                let session = AVAudioSession.sharedInstance()
-                try configureVoiceOutputSession(keepingMedia: self.keepsMediaSessionActive?() == true)
-                try session.setActive(true)
-                let player = try AVAudioPlayer(data: data)
-                guard player.duration > 0, player.duration <= 90 else { throw TARSClientError.unavailable }
-                self.audioPlayer = player
-                player.delegate = self
-                guard player.play() else { throw TARSClientError.unavailable }
-                #if DEBUG
-                self.recordLatency("voice_until_play_seconds", since: synthesisStarted)
-                if let responseStart = self.responseStartedAt {
-                    self.recordLatency("after_capture_until_play_seconds", since: responseStart)
-                }
-                #endif
-                self.state = "SPEAKING"; self.status = "SPEAKING"
-                self.voiceProgress = "Reproduzindo voz natural."
-                self.timeout = Task { [weak self] in
-                    do { try await Task.sleep(for: .seconds(95)) } catch { return }
-                    guard let self, self.generation == id, self.audioPlayer != nil else { return }
-                    self.fail("A reprodução não terminou. Voltando à espera.")
-                }
+                self.completedSpeech()
             } catch {
                 guard !Task.isCancelled, self.generation == id else { return }
                 self.audioPlayer?.stop(); self.audioPlayer = nil
@@ -719,6 +715,100 @@ private let bluetooth = BluetoothManager()
                 self.failService(error)
             }
         }
+    }
+
+    private func playApprovedPart(_ data: Data, id: UUID) async throws {
+        try Task.checkCancellation()
+        guard generation == id else { throw CancellationError() }
+        try configureVoiceOutputSession(keepingMedia: keepsMediaSessionActive?() == true, keepingMicrophone: handsFree && continuousConversation)
+        try AVAudioSession.sharedInstance().setActive(true)
+        let player = try AVAudioPlayer(data: data)
+        guard player.duration > 0, player.duration <= 90 else { throw TARSClientError.unavailable }
+        audioPlayer = player; player.delegate = self
+        beginInterruptionListening()
+        try await withCheckedThrowingContinuation { continuation in
+            partCompletion = continuation
+            guard player.play() else {
+                partCompletion = nil; continuation.resume(throwing: TARSClientError.unavailable); return
+            }
+            state = "SPEAKING"; status = "SPEAKING"
+            voiceProgress = "Reproduzindo voz natural."
+            #if DEBUG
+            if let responseStart = responseStartedAt {
+                recordLatency("after_capture_until_play_seconds", since: responseStart)
+                responseStartedAt = nil
+            }
+            #endif
+            timeout?.cancel()
+            timeout = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(95)) } catch { return }
+                guard let self, self.generation == id, self.partCompletion != nil else { return }
+                self.fail("A reprodução não terminou. Voltando à espera.")
+            }
+        }
+    }
+
+    /// Local-only interruption monitor. It uploads nothing and never routes tools.
+    /// No simultaneous general conversation: an exact interruption opens a new turn.
+    private func beginInterruptionListening() {
+        #if DEBUG
+        if simulatedCapture != nil { return }
+        #endif
+        guard continuousConversation, handsFree, !tapInstalled, state != "LISTENING",
+              keepsMediaSessionActive?() != true, visualRespond == nil,
+              SFSpeechRecognizer.authorizationStatus() == .authorized,
+              let local = SFSpeechRecognizer(locale: Locale(identifier: language)),
+              local.isAvailable, local.supportsOnDeviceRecognition else { return }
+        let token = UUID(); interruptionToken = token
+        do {
+            try configureVoiceOutputSession(keepingMedia: false, keepingMicrophone: true)
+            try AVAudioSession.sharedInstance().setActive(true)
+            let req = SFSpeechAudioBufferRecognitionRequest()
+            req.requiresOnDeviceRecognition = true; req.shouldReportPartialResults = true
+            req.contextualStrings = ["TARS escuta", "TARS pare de falar", "TARS listen"]
+            let node = engine.inputNode; let format = node.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else { return }
+            request = req; recognizer = local
+            node.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in req.append(buffer) }
+            tapInstalled = true
+            recognition = local.recognitionTask(with: req) { [weak self] result, error in
+                let text = result?.bestTranscription.formattedString
+                let ended = result?.isFinal == true || error != nil
+                Task { @MainActor in
+                    guard let self, self.interruptionToken == token, self.handsFree else { return }
+                    // Never accept a matching phrase present in TARS's own output.
+                    if let text, let command = VoiceInterruptionPolicy.command(in: text),
+                       !VoiceInterruptionPolicy.echoes(command, spoken: self.message) {
+                        self.interruptAndListen(); return
+                    }
+                    if ended { self.stopInterruptionListening(token: token) }
+                }
+            }
+            engine.prepare(); try engine.start(); interruptionAvailable = true
+            interruptionDeadline?.cancel()
+            interruptionDeadline = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                self?.stopInterruptionListening(token: token)
+            }
+        } catch { stopInterruptionListening(token: token) }
+    }
+
+    private func stopInterruptionListening(token: UUID) {
+        guard interruptionToken == token else { return }
+        interruptionToken = UUID(); interruptionAvailable = false
+        interruptionDeadline?.cancel(); interruptionDeadline = nil
+        engine.stop()
+        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        request?.endAudio(); recognition?.cancel(); request = nil; recognition = nil
+    }
+
+    /// Explicit interruption cancels answer, queued voice and playback together.
+    func interruptAndListen() {
+        guard !voiceServiceBlocked, UIApplication.shared.applicationState == .active else { return }
+        useAI = true
+        if !handsFree { handsFree = true }
+        _ = voicePolicy.consume("TARS")
+        cancel(message: "Estou ouvindo. Pode falar.")
     }
 
     private func speakStreamed(_ text: String, isConversation: Bool = false, stream: @escaping (String, @escaping @MainActor (Data) throws -> Void) async throws -> Void) {
@@ -814,6 +904,8 @@ private let bluetooth = BluetoothManager()
     }
 
     func cancel(message: String = "Interação encerrada.") {
+        let pendingPart = partCompletion; partCompletion = nil
+        pendingPart?.resume(throwing: CancellationError())
         conversationTask?.cancel(); conversationTask = nil
         speechTask?.cancel(); speechTask = nil
         audioPlayer?.stop(); audioPlayer = nil
@@ -859,7 +951,7 @@ private let bluetooth = BluetoothManager()
         writeVoiceDiagnostic(errorCode: nil, failedStage: "COMPLETED_SPEECH")
         voiceProgress = !handsFree ? "Resposta concluída. Escuta pausada." : voicePolicy.awaitingRequest
             ? "Pode fazer sua pergunta."
-            : "Resposta concluída. Pode continuar sem dizer TARS por 30 segundos."
+            : "Pode continuar sem dizer TARS. Diga dorme para encerrar."
         cancel(message: handsFree ? "Aguardando sua voz…" : "Resposta concluída.")
     }
 
@@ -867,6 +959,13 @@ private let bluetooth = BluetoothManager()
         let identifier = ObjectIdentifier(player)
         Task { @MainActor in
             guard let current = self.audioPlayer, ObjectIdentifier(current) == identifier else { return }
+            if let completion = self.partCompletion {
+                self.partCompletion = nil; self.audioPlayer = nil
+                self.timeout?.cancel(); self.timeout = nil
+                if flag { completion.resume() }
+                else { completion.resume(throwing: TARSClientError.unavailable) }
+                return
+            }
             if flag { self.completedSpeech() }
             else { self.fail("A reprodução foi interrompida. Tente uma nova pergunta.") }
         }
@@ -946,7 +1045,7 @@ extension XRAudioController {
                                           userInfo: [NSLocalizedDescriptionKey: message]) }
         }
         func waitFor(_ predicate: () -> Bool) async throws {
-            for _ in 0..<250 {
+            for _ in 0..<1000 {
                 if predicate() { return }
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -959,6 +1058,7 @@ extension XRAudioController {
         var captures = 0
         audio.simulatedCapture = { captures += 1 }
         audio.simulatedOutput = { outputs.append($0) }
+        audio.wakeRespond = { _, _ in "Estou aqui. Como posso ajudar?" }
         audio.respond = { text, _ in
             requests.append(text)
             return text.contains("English") ? "Hello, I'm TARS." : "Olá, sou o TARS."
@@ -1102,7 +1202,7 @@ extension XRAudioController {
                 try await Task.sleep(for: .milliseconds(100))
                 try receive(Data(repeating: 0, count: 19200))
             }
-            try await waitFor { early.voicePolicy.acceptsFollowUp() }
+            try await waitFor { early.state == "LISTENING" }
             try require(wrongFallback.isEmpty, "Pipeline echoed the question")
             early.suspendHandsFree()
             await early.enableHandsFree()
@@ -1123,7 +1223,8 @@ extension XRAudioController {
 
             audio.transcript = "Ei TARS"
             audio.finish()
-            try require(audio.state == "SPEAKING" && audio.voicePolicy.awaitingRequest,
+            try await waitFor { audio.state == "SPEAKING" }
+            try require(audio.voicePolicy.awaitingRequest && requests.isEmpty && outputs.count == 1,
                         "Wake must acknowledge and await question")
             guard let ack = audio.utterance else { throw CancellationError() }
             audio.speechSynthesizer(audio.speaker, didFinish: ack)
@@ -1205,7 +1306,7 @@ extension XRAudioController {
             await natural.enableHandsFree()
             natural.stopCapture()
             natural.speak("Resposta natural")
-            try await waitFor { natural.voicePolicy.acceptsFollowUp() }
+            try await waitFor { natural.state == "LISTENING" }
             try require(generations == 1 && fallback.isEmpty, "Natural playback did not finish normally")
             natural.suspendHandsFree()
             var pendingAudio: CheckedContinuation<Data, Never>?
@@ -1229,8 +1330,38 @@ extension XRAudioController {
             await natural.enableHandsFree()
             natural.stopCapture()
             natural.speak("Nova resposta com a voz aprovada")
-            try await waitFor { natural.voicePolicy.acceptsFollowUp() }
+            try await waitFor { natural.state == "LISTENING" }
             try require(generations == 3 && fallback.isEmpty, "A new response must recover the approved voice")
+            let segmented = XRAudioController()
+            defer { segmented.suspendHandsFree() }
+            segmented.simulatedCapture = {}
+            segmented.testNaturalVoice = true
+            segmented.simulatedOutput = { _ in }
+            var pieces: [String] = []
+            segmented.synthesize = { text in pieces.append(text); return fixture }
+            await segmented.enableHandsFree()
+            segmented.stopCapture()
+            let longReply = String(repeating: "Uma frase completa para testar a preparação da voz. ", count: 8)
+            segmented.speak(longReply)
+            try await waitFor { segmented.state == "LISTENING" }
+            try require(pieces.count == 2 && pieces.joined() == longReply,
+                        "Prepared MP3-part pipeline lost, repeated or reordered text")
+            let interrupted = XRAudioController()
+            defer { interrupted.suspendHandsFree() }
+            interrupted.simulatedCapture = {}
+            var interruptedOutput: [String] = []
+            interrupted.simulatedOutput = { interruptedOutput.append($0) }
+            var delayedTurn: CheckedContinuation<String, Never>?
+            interrupted.respond = { _, _ in await withCheckedContinuation { delayedTurn = $0 } }
+            await interrupted.enableHandsFree()
+            interrupted.transcript = "TARS, uma pergunta"
+            interrupted.finish()
+            try await waitFor { delayedTurn != nil }
+            interrupted.interruptAndListen()
+            delayedTurn?.resume(returning: "Late cancelled answer"); delayedTurn = nil
+            try await waitFor { interrupted.state == "LISTENING" }
+            try require(interrupted.handsFree && interrupted.voicePolicy.awake && interruptedOutput.isEmpty,
+                        "Interruption lost attention or delivered a cancelled answer")
             return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
@@ -1316,9 +1447,9 @@ private final class BufferedVoicePlayer {
 
 /// Keep the microphone/music route stable when TARS speaks over an open player.
 @MainActor
-private func configureVoiceOutputSession(keepingMedia: Bool) throws {
+private func configureVoiceOutputSession(keepingMedia: Bool, keepingMicrophone: Bool = false) throws {
     let session = AVAudioSession.sharedInstance()
-    if keepingMedia {
+    if keepingMedia || keepingMicrophone {
         let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
         if session.category != .playAndRecord || session.mode != .default || session.categoryOptions != options {
             try session.setCategory(.playAndRecord, mode: .default, options: options)

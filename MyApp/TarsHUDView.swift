@@ -70,6 +70,10 @@ struct TarsHUDView: View {
                     VStack(spacing: 4) {
                         Text(audio.message)
                         Text(audio.voiceSource).font(.caption2)
+                        if audio.state != "IDLE" && audio.state != "LISTENING" {
+                            if audio.interruptionAvailable { Text("Para interromper: TARS escuta").font(.caption2) }
+                            Button("Interromper e ouvir") { audio.interruptAndListen() }
+                        }
                         if !audio.lastHeard.isEmpty {
                             Text("Ouvi: \(audio.lastHeard)").foregroundStyle(.cyan).lineLimit(3)
                         }
@@ -215,16 +219,34 @@ struct TarsHUDView: View {
             audio.keepsMediaSessionActive = { music.track != nil }
             audio.handlesLocally = { text in music.command(for: text) != nil || MailCommand.parse(text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
             audio.respond = { text, language in
-                if let command = MailCommand.parse(text) { return await yahoo.handle(command) }
-                if let command = music.command(for: text) { return await music.handle(command) }
+                if let command = MailCommand.parse(text) {
+                    let answer = await yahoo.handle(command)
+                    try Task.checkCancellation()
+                    model.recordLocalExchange(question: text, answer: answer, source: .mail)
+                    return answer
+                }
+                if let command = music.command(for: text) {
+                    let answer = await music.handle(command)
+                    try Task.checkCancellation()
+                    model.recordLocalExchange(question: text, answer: answer, source: .music)
+                    return answer
+                }
                 if let camera = VoiceCameraCommand.parse(text) {
-                    return try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
+                    let answer = try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
+                    try Task.checkCancellation()
+                    if camera.kind == .photo || camera.kind == .selfie {
+                        model.recordLocalExchange(question: text, answer: answer, source: .camera)
+                    }
+                    return answer
                 }
                 if SpokenRequest.isServiceQuery(text) {
                     return try await model.converse(text: text, language: language)
                 }
                 if let external = ExternalAccessCommand.parse(text) {
-                    return await ExternalAccessAction.perform(command: external)
+                    let answer = await ExternalAccessAction.perform(command: external)
+                    try Task.checkCancellation()
+                    model.recordLocalExchange(question: text, answer: answer, source: .external)
+                    return answer
                 }
                 return try await model.converse(text: text, language: language)
             }

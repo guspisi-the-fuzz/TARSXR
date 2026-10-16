@@ -64,6 +64,10 @@ final class TarsHUDViewModel: ObservableObject {
         )
     }
 
+    func recordLocalExchange(question: String, answer: String, source: ConversationContext.Source, capturedAt: Double? = nil) {
+        runtime.recordLocalExchange(question: question, answer: answer, source: source, capturedAt: capturedAt)
+    }
+
     func transcribe(data: Data) async throws -> String {
         return try await runtime.transcribe(data: data)
     }

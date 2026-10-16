@@ -68,6 +68,33 @@ final class AIStubProtocol: URLProtocol, @unchecked Sendable {
         }
         let interpreted=try await ai.interpretMemory("{\"question\":\"synthetic\"}")
         precondition(interpreted.intent == "unrelated")
+        var capturedInputs = [[[String: Any]]]()
+        AIStubProtocol.handler = { request in
+            var body = request.httpBody ?? Data()
+            if body.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; body.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let payload = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+            capturedInputs.append(payload["input"] as! [[String: Any]])
+            return (200, try JSONSerialization.data(withJSONObject: ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "{\"speech\":\"Resposta sintética.\"}"]]]]]))
+        }
+        for epoch in ["request-one", "request-two"] {
+            _ = try await ai.converse("E o que você viu?", context: [
+                "xr_memory": ["owner_id": "fixture", "revision": epoch, "data_revision": "same-disk-revision", "facts": []],
+                "xr_dialogue": [["question": "Descreva a câmera", "answer": "Uma tela azul", "source": "camera", "historical_observation": true]]])
+        }
+        for input in capturedInputs {
+            let text = String(decoding: try JSONSerialization.data(withJSONObject: input), as: UTF8.self)
+            precondition(text.contains("RECENT_XR_DIALOGUE_DATA") && text.contains("Uma tela azul"))
+            precondition(!input.contains { $0["role"] as? String == "assistant" }, "Managed context must not duplicate private history")
+        }
+        precondition(capturedInputs.count == 2, "Request epochs do not discard shared dialogue")
+
         print("PASS: native AI HTTPS/auth, bounded speech schema without actions, quota mapping, PCM alignment/truncation, invalid WAV/image rejection")
     }
 }

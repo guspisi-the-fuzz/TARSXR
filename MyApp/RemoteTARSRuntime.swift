@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Existing HTTP client surface; kept private to the remote adapter and its tests.
 /// An embedded runtime implements TARSRuntime, not this transport protocol.

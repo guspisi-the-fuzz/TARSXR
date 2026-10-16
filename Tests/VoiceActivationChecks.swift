@@ -24,7 +24,7 @@ import Foundation
         for _ in 0..<20 { p.failed() }
         check(p.retrySeconds == 30, "Backoff remains capped")
         p.reset()
-        check(!p.awake && !p.awaitingRequest && p.retrySeconds == 0.6, "Explicit reset sleeps and clears failures")
+        check(!p.awake && !p.awaitingRequest && p.retrySeconds == 0.15, "Explicit reset sleeps and clears failures")
         check(p.consume("depois do reset") == .ignore, "A new wake is required after reset")
         check(p.consume("tArS: diga olá") == .request("diga olá"), "Wake and request together")
         check(p.consume("TARS, tell me a joke") == .request("tell me a joke"), "English request")

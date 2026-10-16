@@ -48,17 +48,23 @@ private final class DialogueFixtureRuntime: TARSRuntime {
   let base=DialogueFixtureRuntime()
   let online=ProcessInfo.processInfo.environment["TARS_TEST_ONLINE"] == "1"
   var calls=0, exchanges=0
+  #if canImport(ImageIO)
   let ai=NativeAIService {
     guard let key=ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !key.isEmpty else { throw TARSClientError.ai("AI_UNCONFIGURED") }
     return (key,ProcessInfo.processInfo.environment["OPENAI_MODEL"] ?? "gpt-5.4-mini")
   }
+  #endif
   let reasoner=XRMemoryReasoner { payload in
     calls += 1
     let json=try JSONSerialization.jsonObject(with:Data(payload.utf8)) as! [String:Any]
     let recent=json["recent_exchanges"] as! [[String:String]]
     exchanges=recent.count
     precondition(recent.contains { ($0["answer"] ?? "").contains("Luma") })
+    #if canImport(ImageIO)
     if online { return try await ai.interpretMemory(payload) }
+    #else
+    precondition(!online, "Online checks require the native Apple provider")
+    #endif
     return XRLogic.Plan(intent:"query",facts:[
       .init(relation:"lives",terms:["Luma","@user"],negative:false,source:"luma"),
       .init(relation:"lives",terms:["Luma","Nora"],negative:false,source:"luma")],

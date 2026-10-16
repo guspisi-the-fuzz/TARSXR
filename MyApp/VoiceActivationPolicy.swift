@@ -19,7 +19,7 @@ struct VoiceActivationPolicy {
     }
 
     var retrySeconds: Double {
-        failures == 0 ? 0.6 : min(30, pow(2, Double(failures - 1)))
+        failures == 0 ? 0.15 : min(30, pow(2, Double(failures - 1)))
     }
 
     mutating func consume(
@@ -125,11 +125,13 @@ struct OnlineVoiceTrialBudget {
 struct VoiceCaptureWindow {
     enum Decision: Equatable { case keepListening, finish, discard }
     private let startedAt: TimeInterval
+    private let silenceSeconds: Double
     private var lastVoiceAt: TimeInterval
     private var heardVoice = false
     private var invalidClock = false
 
-    init(now: TimeInterval) {
+    init(now: TimeInterval, silenceSeconds: Double = 2.2) {
+        self.silenceSeconds = silenceSeconds.isFinite ? min(3, max(0.8, silenceSeconds)) : 2.2
         startedAt = now
         lastVoiceAt = now
         invalidClock = !now.isFinite || now < 0
@@ -146,7 +148,7 @@ struct VoiceCaptureWindow {
         let elapsed = now - startedAt
         let hasSpeech = heardVoice || hasTranscript
         if elapsed >= 20 { return hasSpeech ? .finish : .discard }
-        if hasSpeech && now - lastVoiceAt >= 2.2 { return .finish }
+        if hasSpeech && now - lastVoiceAt >= silenceSeconds { return .finish }
         if !hasSpeech && elapsed >= 15 { return .discard }
         return .keepListening
     }

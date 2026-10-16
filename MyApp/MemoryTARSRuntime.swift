@@ -39,6 +39,9 @@ final class MemoryTARSRuntime: TARSRuntime {
     private let underlying: any TARSRuntime
     private let memory: @MainActor () throws -> XRPersistentMemory
     private var store: XRPersistentMemory?
+    private var dialogue = ConversationContext()
+    private var conversationBusy = false
+    private var forwardedConversation = false
     private var lastKeys: [String] = []
     private var lastRecallAt = 0.0
     private var conversationRevision = UUID().uuidString
@@ -126,16 +129,35 @@ final class MemoryTARSRuntime: TARSRuntime {
         return (updated, changed)
     }
 
+    func recordLocalExchange(question: String, answer: String, source: ConversationContext.Source, capturedAt: Double?) {
+        if let doc = try? storage().load() { dialogue.synchronize(owner: doc.ownerID, revision: doc.revision) }
+        else { dialogue.clear() }
+        if source != .memory && source != .conversation { lastKeys = []; lastRecallAt = 0 }
+        dialogue.append(question: question, answer: answer, source: source, now: uptime(), capturedAt: capturedAt)
+    }
+
     func converse(text: String, language: String, context: [String: Any]?) async throws -> String {
+        guard !conversationBusy else { throw TARSClientError.ai("AI_BUSY") }
+        conversationBusy = true; forwardedConversation = false
+        defer { conversationBusy = false }
         prepareConversation?(text)
         let before = try? storage().load()
+        if let before { dialogue.synchronize(owner: before.ownerID, revision: before.revision) }
+        else { dialogue.clear() }
         let answer = try await converseImpl(text:text, language:language, context:context)
         try Task.checkCancellation()
-        if context?["internal_wake_summary"] as? Bool != true,
-           !SpokenRequest.isServiceQuery(text), XRMemoryIntent.isQuestionLike(text),
-           let before, let after = try? storage().load(),
-           before.ownerID == after.ownerID, before.revision == after.revision {
-            observeRecall?(text,answer,after)
+        if context?["internal_wake_summary"] as? Bool != true {
+            var mutated = false
+            if let after = try? storage().load() {
+                mutated = before?.revision != after.revision || before?.ownerID != after.ownerID
+                dialogue.synchronize(owner: after.ownerID, revision: after.revision)
+                if !SpokenRequest.isServiceQuery(text), XRMemoryIntent.isQuestionLike(text),
+                   let before, before.ownerID == after.ownerID, before.revision == after.revision,
+                   !forwardedConversation {
+                    observeRecall?(text,answer,after)
+                }
+            }
+            if !mutated { dialogue.append(question: text, answer: answer, source: forwardedConversation ? .conversation : .memory, now: uptime()) }
         }
         return answer
     }
@@ -144,10 +166,17 @@ final class MemoryTARSRuntime: TARSRuntime {
         try Task.checkCancellation()
         let english = XRMemoryIntent.english(text)
         let store: XRPersistentMemory
-        do { store = try storage() }
+        do { store = try storage(); _ = try store.load() }
         catch {
             traceMemory("store_open_failed")
-            invalidateConversation(); return english ? "I could not access memory on the XR. No save was confirmed." : XRMemoryError.unavailable.localizedDescription
+            invalidateConversation()
+            if case .ordinary = XRMemoryIntent.parse(text), !ConversationPolicy.isPersonal(text), !ConversationPolicy.usesReference(text) {
+                var safe = context ?? [:]; safe["xr_dialogue"] = [[String: Any]]()
+                safe["xr_memory_unavailable"] = true
+                forwardedConversation = true
+                return try await underlying.converse(text: text, language: language, context: safe)
+            }
+            return english ? "I could not access memory on the XR. No save was confirmed." : XRMemoryError.unavailable.localizedDescription
         }
         // Internal wake summaries are not user instructions and cannot write memory.
         let internalWake = context?["internal_wake_summary"] as? Bool == true
@@ -177,7 +206,11 @@ final class MemoryTARSRuntime: TARSRuntime {
             // local XR store first. The model/logical recall can mix nearby facts
             // and produce wrong associations like answering Daniela with Mel.
             case .recall, .recallAttribute: eligible = false
-            case .ordinary: eligible = XRMemoryIntent.isQuestionLike(text)
+            case .ordinary:
+                let document = try store.load()
+                let selected = store.context(for: text, document: document)["facts"] as? [[String: Any]] ?? []
+                let recentReference = ConversationPolicy.usesReference(text) && !lastKeys.isEmpty && uptime() >= lastRecallAt && uptime() - lastRecallAt <= 120
+                eligible = XRMemoryIntent.isQuestionLike(text) && (!selected.isEmpty || recentReference || ConversationPolicy.isPersonal(text))
             default: eligible = false
             }
             if eligible {
@@ -202,7 +235,7 @@ final class MemoryTARSRuntime: TARSRuntime {
                                           correction: true)
                 traceMemory("save_verified", fields: ["correction": true])
                 lastKeys = [fact.key]
-                lastRecallAt = ProcessInfo.processInfo.systemUptime
+                lastRecallAt = uptime()
                 invalidateConversation()
                 return english ? "Saved on this XR: \(fact.statement)."
                     : "Salvei neste XR: \(XRMemoryIntent.naturalizedStatement(fact.statement))"
@@ -441,7 +474,7 @@ final class MemoryTARSRuntime: TARSRuntime {
                         lastKeys = []; lastRecallAt = 0
                         throw XRMemoryError.ambiguous
                     }
-                    lastKeys = matches.map(\.key); lastRecallAt = ProcessInfo.processInfo.systemUptime
+                    lastKeys = matches.map(\.key); lastRecallAt = uptime()
                     invalidateConversation()
                     let names = matches.compactMap { XRMemoryIntent.displayName(subject: $0.subject, statement: $0.statement) }
                     if key == "meu irmao" || key == "minha irma" {
@@ -479,7 +512,7 @@ final class MemoryTARSRuntime: TARSRuntime {
                     invalidateConversation()
                     return english ? "I do not have that saved on this XR." : "Não tenho essa informação salva neste XR."
                 }
-                lastKeys = [fact.key]; lastRecallAt = ProcessInfo.processInfo.systemUptime
+                lastKeys = [fact.key]; lastRecallAt = uptime()
                 invalidateConversation()
                 let relationKey = XRMemoryIntent.canonicalRelationQuery(reference)
                 switch attribute {
@@ -533,16 +566,20 @@ final class MemoryTARSRuntime: TARSRuntime {
             traceMemory("context_loaded", fields: ["fact_count": doc.facts.count])
             let followUp = text.range(of: #"(?i)\b(ela|ele|isso|explica|explique|entendi|she|he|it|explain|understand)\b"#, options: .regularExpression) != nil
                 || text.range(of: #"(?i)^\s*(?:(?:me\s+)?(?:fale|fala|conte|conta)\s+mais|desenvolva|tell\s+me\s+more)[.!?]*\s*$"#, options: .regularExpression) != nil
-            let keys = followUp && ProcessInfo.processInfo.systemUptime - lastRecallAt < 60 ? lastKeys : []
+            let keys = followUp && uptime() - lastRecallAt < 60 ? lastKeys : []
             var current = context ?? [:]
             var memoryContext = store.context(for: text, document: doc, followUpKeys: keys)
             // Opaque request-context epoch: a local reply must also supersede any old
             // remote confirmation, even when it only reads memory and writes no file.
             memoryContext["revision"] = requestRevision
+            memoryContext["data_revision"] = doc.revision
             current["xr_memory"] = memoryContext
+            current["xr_dialogue"] = dialogue.payload(now: uptime())
+            let dialogueGeneration = dialogue.generation
+            forwardedConversation = true
             if let facts = memoryContext["facts"] as? [[String: Any]], !facts.isEmpty {
                 lastKeys = facts.compactMap { $0["key"] as? String }
-                lastRecallAt = ProcessInfo.processInfo.systemUptime
+                lastRecallAt = uptime()
             } else if !followUp {
                 lastKeys = []; lastRecallAt = 0
             }
@@ -550,7 +587,7 @@ final class MemoryTARSRuntime: TARSRuntime {
             let result = try await underlying.converse(text: text, language: language, context: current)
             try Task.checkCancellation()
             // Never deliver an answer based on a record deleted while this request waited.
-            guard try store.load().revision == doc.revision, conversationRevision == requestRevision else { throw XRMemoryError.changed }
+            guard try store.load().revision == doc.revision, conversationRevision == requestRevision, dialogue.generation == dialogueGeneration else { throw XRMemoryError.changed }
             traceMemory("remote_answer")
             return result
         } catch let error as XRMemoryError {
@@ -694,7 +731,7 @@ final class MemoryTARSRuntime: TARSRuntime {
 
         if matches.count > 1 {
             lastKeys = matches.map { $0.key }
-            lastRecallAt = ProcessInfo.processInfo.systemUptime
+            lastRecallAt = uptime()
 
             let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
             let options = matches.enumerated().map { index, fact in
@@ -710,7 +747,7 @@ final class MemoryTARSRuntime: TARSRuntime {
         guard let fact = matches.first else { return nil }
 
         lastKeys = [fact.key]
-        lastRecallAt = ProcessInfo.processInfo.systemUptime
+        lastRecallAt = uptime()
 
         let value = localRelationNameValue(fact: fact, subject: subject)
 
@@ -993,7 +1030,7 @@ final class MemoryTARSRuntime: TARSRuntime {
             let profileKeys = XRMemoryProfileResolverV1.followUpKeys(text: raw, document: profileDocument)
             if !profileKeys.isEmpty {
                 lastKeys = profileKeys
-                lastRecallAt = ProcessInfo.processInfo.systemUptime
+                lastRecallAt = uptime()
             }
             return profileAnswer
         }
@@ -1043,24 +1080,20 @@ final class MemoryTARSRuntime: TARSRuntime {
         }()
         guard asksHome || asksPerson != nil || asksAlias || asksStatus else { return nil }
         if asksStatus {
-            let now = ProcessInfo.processInfo.systemUptime
-            let recentlyAnsweredFromMemory = lastRecallAt > 0 && (now - lastRecallAt) <= 300.0
-            let hasSavedFacts: Bool
-            if let statusDocument = try? store.load() {
-                hasSavedFacts = !statusDocument.facts.isEmpty
-            } else {
-                hasSavedFacts = false
-            }
-            lastRecallAt = now
+            let now = uptime()
+            let statusDocument = try store.load()
+            let recent = lastRecallAt > 0 && now >= lastRecallAt && now - lastRecallAt <= 120
+            let resolved = !lastKeys.isEmpty && lastKeys.allSatisfy { key in statusDocument.facts.contains { $0.key == key } }
             invalidateConversation()
-            if recentlyAnsweredFromMemory || hasSavedFacts {
+            if recent && resolved {
                 return english ? "The information is saved in this XR's local memory." : "Essa informação está salva na memória local deste XR."
             }
-            return english ? "I did not find that information saved on this XR." : "Não encontrei essa informação salva neste XR."
+            return english ? "Which information do you want me to check in local memory?" : "Qual informação você quer que eu confira na memória local?"
         }
+
         if asksAlias {
             lastKeys = []
-            lastRecallAt = ProcessInfo.processInfo.systemUptime
+            lastRecallAt = uptime()
             invalidateConversation()
             return english ? "On this XR, Dani is treated as a nickname for Daniela." : "Neste XR, Dani será tratada como apelido de Daniela."
         }
@@ -1156,7 +1189,7 @@ final class MemoryTARSRuntime: TARSRuntime {
             var unique: [String] = []
             for key in rawKeys where !unique.contains(key) { unique.append(key) }
             lastKeys = unique
-            lastRecallAt = ProcessInfo.processInfo.systemUptime
+            lastRecallAt = uptime()
             invalidateConversation()
         }
         var sorted = orderedResidents(Array(coResidents.values))

@@ -18,7 +18,7 @@ fi
 run_check() {
   local name="$1"; shift
   echo "Compilando e testando: $name"
-  if ! "$SWIFTC" "${SWIFT_FLAGS[@]}" MyApp/SpokenRequest.swift "$@" -o "$OUT/$name" > "$OUT/$name.build.log" 2>&1; then
+  if ! "$SWIFTC" "${SWIFT_FLAGS[@]}" MyApp/SpokenRequest.swift MyApp/ConversationContext.swift MyApp/PreparedVoicePipeline.swift "$@" -o "$OUT/$name" > "$OUT/$name.build.log" 2>&1; then
     cat "$OUT/$name.build.log"; return 1
   fi
   "$OUT/$name" > "$OUT/$name.test.log" 2>&1 || { cat "$OUT/$name.test.log"; return 1; }
@@ -30,11 +30,36 @@ build_ios() {
   if ! xcodebuild -project TARSXR.xcodeproj -scheme TARSXR -configuration "$config" \
     -destination "generic/platform=$platform" -derivedDataPath "$OUT/DerivedData" \
     CODE_SIGNING_ALLOWED=NO build > "$OUT/$label.log" 2>&1; then
-    tail -100 "$OUT/$label.log"; return 1
+    python3 - "$OUT/$label.log" <<'PYLOG'
+from pathlib import Path
+import sys
+lines=Path(sys.argv[1]).read_text(errors='replace').splitlines()
+selected=set()
+for i,line in enumerate(lines):
+    if 'error:' in line or 'fatal error:' in line:
+        selected.update(range(max(0,i-3),min(len(lines),i+7)))
+if selected:
+    print('Compiler errors:')
+    for i in sorted(selected): print(f'{i+1}: {lines[i][:1200]}')
+else:
+    print('\n'.join(lines[-100:]))
+print('Full build log:',sys.argv[1])
+PYLOG
+    return 1
   fi
   grep -F '** BUILD SUCCEEDED **' "$OUT/$label.log" || return 1
 }
 if [[ "$(uname -s)" == Darwin ]]; then build_ios Debug 'iOS Simulator' debug-before-tests; fi
+python3 - "$OUT/camera-parser.swift" <<'PYCODE'
+from pathlib import Path
+import sys
+source = Path('MyApp/ReferenceCamera.swift').read_text()
+a = source.index('struct VoiceCameraCommand:')
+b = source.index('@MainActor\nenum VoiceCameraAction', a)
+Path(sys.argv[1]).write_text('import Foundation\nenum AVCaptureDevice { enum Position: Equatable { case front, back } }\n' + source[a:b])
+PYCODE
+run_check conversation-camera-parser "$OUT/camera-parser.swift" Tests/ConversationCameraParserChecks.swift
+run_check conversation-continuity MyApp/VoiceActivationPolicy.swift MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/ConversationContinuityChecks.swift
 run_check frame-quality MyApp/FrameQuality.swift Tests/FrameQualityChecks.swift
 run_check video-frame-gate MyApp/SequentialSessionCamera.swift Tests/VideoFrameGateChecks.swift
 run_check sequential-vision MyApp/SequentialVisionPolicy.swift Tests/SequentialVisionChecks.swift
@@ -42,6 +67,9 @@ run_check vision-description MyApp/VisionDescriptionAvailability.swift MyApp/Seq
 run_check spoken-request Tests/SpokenRequestChecks.swift
 run_check logic MyApp/XRLogic.swift Tests/XRLogicChecks.swift
 run_check memory-reasoner MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift Tests/XRMemoryReasonerChecks.swift
+if [[ "$(uname -s)" != Darwin ]]; then
+  run_check memory-dialogue MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift Tests/XRMemoryDialogueChecks.swift
+fi
 if [[ "$(uname -s)" == Darwin ]]; then
   run_check native-core MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/NativePublicLookup.swift MyApp/NativeAIKeychain.swift MyApp/XRLogic.swift MyApp/NativeAIService.swift MyApp/NativeAIRuntime.swift MyApp/NativeBodyCore.swift Tests/NativeCoreChecks.swift
   run_check memory-dialogue MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift MyApp/NativeAIService.swift Tests/XRMemoryDialogueChecks.swift

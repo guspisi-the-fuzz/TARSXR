@@ -63,10 +63,11 @@ enum ReferenceCameraAccess {
 
 @MainActor
 enum ReferencePhoto {
-    static func normalize(_ input: UIImage) -> (image: UIImage, png: Data)? {
+    static func normalize(_ input: UIImage, maximumDimension: CGFloat = 480) -> (image: UIImage, png: Data)? {
         let width = input.size.width, height = input.size.height
         guard width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
-        let ratio = min(1, 480 / max(width, height))
+        guard maximumDimension.isFinite, (480...1024).contains(maximumDimension) else { return nil }
+        let ratio = min(1, maximumDimension / max(width, height))
         let size = CGSize(width: max(1, floor(width*ratio)), height: max(1, floor(height*ratio)))
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1; format.preferredRange = .standard; format.opaque = true
@@ -245,7 +246,7 @@ struct VoiceCameraCommand: Equatable {
         let text = normalize(SpokenRequest.clean(raw))
         guard !text.isEmpty else { return nil }
 
-        let mentionsVision =
+        let mentionsVision = VisualQuestionPolicy.explicitCurrent(raw) ||
             text.contains("camera") ||
             text.contains("foto") ||
             text.contains("selfie") ||
@@ -272,6 +273,7 @@ struct VoiceCameraCommand: Equatable {
         }
 
         if (text.contains("mel") && (
+            text.contains("procure") ||
             text.contains("procura") ||
             text.contains("procurar") ||
             text.contains("ache") ||
@@ -379,6 +381,10 @@ struct VoiceCameraCommand: Equatable {
                     ? "Foto capturada pela câmera frontal do XR."
                     : "Foto capturada pela câmera traseira do XR."
             )
+        }
+
+        if VisualQuestionPolicy.explicitCurrent(raw) {
+            return VoiceCameraCommand(kind: .describe, position: .back, source: "reference", question: String(SpokenRequest.clean(raw).prefix(500)))
         }
 
         return nil
@@ -797,6 +803,11 @@ enum ReferenceCameraChecks {
         guard let photo = ReferencePhoto.normalize(large) else { throw NSError(domain: "Photo normalization failed", code: 1) }
         try check(photo.image.size == CGSize(width: 480, height: 320) && photo.image.imageOrientation == .up, "Photo resolution/orientation")
         try check(ReferencePhoto.normalize(UIImage()) == nil, "Empty photo accepted")
+        let vga = UIGraphicsImageRenderer(size: CGSize(width: 480, height: 640), format: format).image { c in
+            UIColor.blue.setFill(); c.fill(CGRect(x: 0, y: 0, width: 480, height: 640))
+        }
+        try check(ReferencePhoto.normalize(vga, maximumDimension: 640)?.image.size == vga.size, "Sequential VGA detail was reduced")
+        try check(ReferencePhoto.normalize(vga, maximumDimension: 4096) == nil, "Unbounded normalization accepted")
         try photo.png.write(to: URL.documentsDirectory.appendingPathComponent("normalized-camera-check.png"), options: .atomic)
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("tars-photo-check-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: temp) }
