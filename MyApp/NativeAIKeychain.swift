@@ -12,6 +12,12 @@ import Security
         return try JSONDecoder().decode(Configuration.self, from: data)
     }
     #if DEBUG
+    static func diagnosticStatus() -> OSStatus {
+        var q = query
+        q[kSecReturnAttributes as String] = true
+        return SecItemCopyMatching(q as CFDictionary, nil)
+    }
+
     /// One-time development provisioning into this device's Keychain. Import file is removed.
     static func importProvisioning() throws {
         let url = URL.documentsDirectory.appendingPathComponent("native-ai-provision.json")

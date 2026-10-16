@@ -399,6 +399,9 @@ struct VoiceCameraCommand: Equatable {
 @MainActor
 enum VoiceCameraAction {
     static func captureAndDescribe(command: VoiceCameraCommand, model: TarsHUDViewModel) async throws -> String {
+        if command.kind == .describe || command.kind == .findMel {
+            return try await SequentialVision.shared.answerCurrent(question: command.question, using: model)
+        }
         try await SequentialVision.shared.prepareStill()
         defer { SequentialVision.shared.finishStill() }
         let image = try await VoiceStillCamera.capture(position: command.position)

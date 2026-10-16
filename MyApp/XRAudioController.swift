@@ -643,6 +643,17 @@ private let bluetooth = BluetoothManager()
         speak(text)
     }
 
+    /// Button output uses the existing voice and preserves the user's listening mode.
+    /// Do not interrupt another response or speak while an image panel owns audio.
+    func speakCurrentVisionDescription(_ text: String) {
+        guard visualRespond == nil, state == "IDLE" || state == "LISTENING",
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 2000 else { return }
+        restartTask?.cancel(); restartTask = nil
+        stopCapture()
+        useAI = true
+        speak(text)
+    }
+
     private func speak(_ text: String) {
         #if DEBUG
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
@@ -1065,6 +1076,20 @@ extension XRAudioController {
             try require(vision.state == "IDLE" && vision.utterance == nil, "Vision cancellation failed")
             vision.speakVisionDescription("  ")
             try require(visionOutputs.count == 2, "Empty vision response was spoken")
+            let currentVision = XRAudioController()
+            defer { currentVision.suspendHandsFree() }
+            var currentOutputs: [String] = []
+            currentVision.simulatedCapture = {}
+            currentVision.simulatedOutput = { currentOutputs.append($0) }
+            await currentVision.enableHandsFree()
+            currentVision.speakCurrentVisionDescription("Há um livro sobre a mesa.")
+            try require(currentOutputs.count == 1 && currentVision.handsFree && currentVision.useAI,
+                        "Current vision output lost hands-free mode or approved voice")
+            currentVision.speakCurrentVisionDescription("Não interrompa a resposta atual.")
+            try require(currentOutputs.count == 1, "Current vision output interrupted active speech")
+            currentVision.suspendHandsFree()
+            currentVision.speakCurrentVisionDescription("  ")
+            try require(currentOutputs.count == 1, "Empty current vision response was spoken")
             let early = XRAudioController()
             defer { early.suspendHandsFree() }
             early.simulatedCapture = {}

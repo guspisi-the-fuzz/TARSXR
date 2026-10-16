@@ -46,7 +46,7 @@ struct TarsHUDView: View {
                         .onDisappear { music.visible = false; music.pauseForBackground() }
                     Text(music.status).font(.caption).lineLimit(2)
                 }
-                SequentialVisionControls(vision: .shared, model: model)
+                SequentialVisionControls(vision: .shared, model: model, speak: { audio.speakCurrentVisionDescription($0) }, audioAvailable: audio.state == "IDLE" || audio.state == "LISTENING")
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
                 #if DEBUG

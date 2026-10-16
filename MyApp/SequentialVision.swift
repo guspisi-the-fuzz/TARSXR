@@ -8,13 +8,15 @@ import AVFoundation
     static let shared = SequentialVision()
     @Published private(set) var state = "OFF"
     @Published private(set) var detail = "Ative para observar localmente."
+    @Published private(set) var fullDescription = ""
+    @Published private(set) var buttonRequestPending = false
     @Published private(set) var lastFrame: Date?
     @Published private(set) var active = false
     @Published private(set) var quality: FrameQuality?
     private var policy = SequentialVisionPolicy()
     private var frame: (png: Data, signature: [UInt8], time: TimeInterval)?
     private var worker: Task<Void, Never>?
-    private var analysis: Task<Void, Never>?
+    private var analysis: Task<String, Error>?
     private var generation = UUID()
     private var stillBusy = false
     private var camera: SequentialSessionCamera?
@@ -109,23 +111,59 @@ import AVFoundation
         guard let frame else { return "UNAVAILABLE" }
         return now - frame.time > 8 ? "STALE" : "FRESH"
     }
+    private var descriptionAvailability: VisionDescriptionAvailability {
+        .evaluate(active: active, state: state, qualityAccepted: quality?.accepted, captured: frame?.time, now: now)
+    }
     var canAnalyze: Bool {
-        guard active, let frame else { return false }
+        guard descriptionAvailability == .ready, let frame else { return false }
         return policy.eligible(now: now, captured: frame.time, signature: frame.signature)
     }
-    func describe(using model: TarsHUDViewModel) {
-        guard active, let frame, policy.analyze(now: now, captured: frame.time, signature: frame.signature) else { return }
+    /// Shared button/voice path. No still capture and no implicit activation.
+    func answerCurrent(question: String, using model: TarsHUDViewModel) async throws -> String {
+        try Task.checkCancellation()
+        let availability = descriptionAvailability
+        guard availability == .ready, let frame else {
+            detail = availability.message
+            return availability.message
+        }
+        if let denial = policy.analysisDenial(now: now, captured: frame.time, signature: frame.signature) {
+            // A simultaneous request must not overwrite the in-flight result.
+            if denial != .busy { detail = denial.message }
+            return denial.message
+        }
+        guard policy.analyze(now: now, captured: frame.time, signature: frame.signature) else { return "Já existe uma análise em andamento." }
         let token = generation
-        analysis = Task {
-            defer { policy.finish() }
+        let capturedAt = lastFrame
+        let task = Task { @MainActor in
+            let reply = try await model.describeImage(png: frame.png, source: "reference", question: question)
+            try Task.checkCancellation()
+            guard token == generation, active else { throw CancellationError() }
+            detail = "Descrição do quadro de \(capturedAt?.formatted(date: .omitted, time: .standard) ?? "—"): " + reply.description
+            fullDescription = detail
+            return reply.description
+        }
+        analysis = task
+        defer { policy.finish(); analysis = nil }
+        do {
+            return try await withTaskCancellationHandler(operation: {
+                try await task.value
+            }, onCancel: { task.cancel() })
+        } catch {
+            if token == generation, !Task.isCancelled, !(error is CancellationError) { detail = error.localizedDescription }
+            throw error
+        }
+    }
+    func describe(using model: TarsHUDViewModel, speak: @escaping @MainActor (String) -> Void) {
+        guard canAnalyze, !buttonRequestPending else { return }
+        buttonRequestPending = true
+        let token = generation
+        Task { @MainActor in
+            defer { buttonRequestPending = false }
             do {
-                let reply = try await model.describeImage(png: frame.png, source: "reference", question: "Descreva este quadro recente do XR. É uma amostra pontual, não um sensor de segurança. Não autorize movimento nem estime distâncias.")
-                guard token == generation, !Task.isCancelled else { return }
-                detail = "Descrição do quadro de \(lastFrame?.formatted(date: .omitted, time: .standard) ?? "—"): " + reply.description
-            } catch {
-                guard token == generation else { return }
-                detail = error.localizedDescription
-            }
+                let answer = try await answerCurrent(question: "Descreva este quadro recente do XR. É uma amostra pontual, não um sensor de segurança. Não autorize movimento nem estime distâncias.", using: model)
+                guard token == generation, active, !Task.isCancelled else { return }
+                speak(answer)
+            } catch { /* The error remains visible; cancelled replies are never spoken. */ }
         }
     }
     private static func assessQuality(_ image: UIImage) -> FrameQuality {
@@ -156,6 +194,9 @@ import AVFoundation
 struct SequentialVisionControls: View {
     @ObservedObject var vision: SequentialVision
     let model: TarsHUDViewModel
+    let speak: @MainActor (String) -> Void
+    let audioAvailable: Bool
+    @State private var showsDescription = false
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(alignment: .leading, spacing: 4) {
@@ -164,7 +205,8 @@ struct SequentialVisionControls: View {
                     Button(vision.active ? "Parar visão" : "Ativar visão local") {
                         if vision.active { vision.stop() } else { vision.start() }
                     }
-                    Button("Descrever (API paga)") { vision.describe(using: model) }.disabled(!vision.canAnalyze)
+                    Button("Descrever e falar") { vision.describe(using: model, speak: speak) }
+                        .disabled(!vision.canAnalyze || vision.buttonRequestPending || !audioAvailable)
                 }
                 Text("IA: \(vision.paidAttempts)/5 nesta execução · intervalo mínimo 30s · exige mudança de cena")
                 if let quality = vision.quality {
@@ -172,7 +214,19 @@ struct SequentialVisionControls: View {
                     Text(quality.message)
                 }
                 Text(vision.detail).lineLimit(3)
+                Button("Ler descrição completa") { showsDescription = true }
+
             }.font(.caption).buttonStyle(.bordered)
+        }
+        .sheet(isPresented: $showsDescription) {
+            NavigationStack {
+                ScrollView {
+                    Text(vision.fullDescription.isEmpty ? vision.detail : vision.fullDescription).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding()
+                }
+                .navigationTitle("Descrição visual")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fechar") { showsDescription = false } } }
+            }
         }
     }
 }

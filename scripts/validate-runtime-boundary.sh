@@ -38,6 +38,7 @@ if [[ "$(uname -s)" == Darwin ]]; then build_ios Debug 'iOS Simulator' debug-bef
 run_check frame-quality MyApp/FrameQuality.swift Tests/FrameQualityChecks.swift
 run_check video-frame-gate MyApp/SequentialSessionCamera.swift Tests/VideoFrameGateChecks.swift
 run_check sequential-vision MyApp/SequentialVisionPolicy.swift Tests/SequentialVisionChecks.swift
+run_check vision-description MyApp/VisionDescriptionAvailability.swift MyApp/SequentialVisionPolicy.swift Tests/VisionDescriptionChecks.swift
 run_check spoken-request Tests/SpokenRequestChecks.swift
 run_check logic MyApp/XRLogic.swift Tests/XRLogicChecks.swift
 run_check memory-reasoner MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift Tests/XRMemoryReasonerChecks.swift

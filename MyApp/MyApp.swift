@@ -29,7 +29,13 @@ struct MyApp: App {
         let services: any TARSRuntime
         var observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)? = nil
         var logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil
-        if (try? NativeAIKeychain.load()) != nil {
+        let nativeAvailable = (try? NativeAIKeychain.load()) != nil
+        #if DEBUG
+        print("[TARS_RUNTIME] KEYCHAIN_STATUS", NativeAIKeychain.diagnosticStatus())
+        print("[TARS_RUNTIME] CONFIG_READABLE", nativeAvailable)
+        print("[TARS_RUNTIME] BUNDLE", Bundle.main.bundleIdentifier ?? "unknown")
+        #endif
+        if nativeAvailable {
             services = NativeAIRuntime(body: remote, ai: NativeAIRuntime.service)
             let reasoner = XRMemoryReasoner { try await NativeAIRuntime.service.interpretMemory($0) }
             logicalRecall = { try await reasoner.answer($0,document:$1) }
