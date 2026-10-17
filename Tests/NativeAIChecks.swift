@@ -95,6 +95,42 @@ final class AIStubProtocol: URLProtocol, @unchecked Sendable {
         }
         precondition(capturedInputs.count == 2, "Request epochs do not discard shared dialogue")
 
+        let memoryQuestion = MemoryDialogueRequest(question: "Quem é Iara?", language: "pt-BR", ownerID: "fixture", revision: "r1",
+            facts: [.init(key: "iara", subject: "Iara", statement: "Iara é uma gata que mora comigo e com Raul")],
+            dialogue: [["question": "Quem mora aqui?", "answer": "Uma resposta anterior.", "source": "memory"]], focusKey: "", omittedFactCount: 0)
+        var memoryRequests = 0
+        AIStubProtocol.handler = { request in
+            memoryRequests += 1
+            var bytes = request.httpBody ?? Data()
+            if bytes.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    precondition(count >= 0, "Could not read mocked request body stream")
+                    if count == 0 { break }
+                    bytes.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let body = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+            precondition(body["tools"] == nil && body["tool_choice"] == nil && body["store"] as? Bool == false)
+            precondition((body["reasoning"] as? [String: String])?["effort"] == "medium")
+            let format = (body["text"] as! [String: Any])["format"] as! [String: Any]
+            precondition(format["name"] as? String == "tars_memory_dialogue" && format["strict"] as? Bool == true)
+            let schema = format["schema"] as! [String: Any]
+            precondition(Set(schema["required"] as! [String]) == ["status", "speech", "source_keys", "focus_key"])
+            let input = body["input"] as! [[String: String]]
+            precondition(input.count == 1 && input[0]["content"]!.contains("Uma resposta anterior."))
+            return (200, try JSONSerialization.data(withJSONObject: ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "{\"status\":\"answered\",\"speech\":\"A Iara é sua gata e mora com você e com o Raul.\",\"source_keys\":[\"iara\"],\"focus_key\":\"iara\"}"]]]]]))
+        }
+        let natural = try await ai.converseMemory(memoryQuestion)
+        precondition(natural.speech.contains("mora com você e com o Raul") && memoryRequests == 1)
+        AIStubProtocol.handler = { _ in
+            (200, try JSONSerialization.data(withJSONObject: ["status": "completed", "output": [["type": "message", "content": [["type": "output_text", "text": "{\"status\":\"answered\",\"speech\":\"Inventado\",\"source_keys\":[\"phantom\"],\"focus_key\":\"iara\"}"]]]]]))
+        }
+        do { _ = try await ai.converseMemory(memoryQuestion); preconditionFailure("invented source accepted") }
+        catch MemoryDialogueReply.Failure.invalid {}
+
         print("PASS: native AI HTTPS/auth, bounded speech schema without actions, quota mapping, PCM alignment/truncation, invalid WAV/image rejection")
     }
 }

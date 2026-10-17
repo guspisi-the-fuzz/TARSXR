@@ -28,6 +28,7 @@ struct MyApp: App {
         let remote = RemoteTARSRuntime(client: TARSClient(baseURL: baseURL), pairingSecret: pairingSecret)
         let services: any TARSRuntime
         var observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)? = nil
+        var memoryDialogue: (@MainActor (MemoryDialogueRequest) async throws -> MemoryDialogueReply)? = nil
         var evidenceRecall: (@MainActor (String, XRMemoryDocument) async throws -> MemoryRecallEvidence?)? = nil
         let nativeAvailable = (try? NativeAIKeychain.load()) != nil
         #if DEBUG
@@ -37,6 +38,7 @@ struct MyApp: App {
         #endif
         if nativeAvailable {
             services = NativeAIRuntime(body: remote, ai: NativeAIRuntime.service)
+            memoryDialogue = { try await NativeAIRuntime.service.converseMemory($0) }
             let reasoner = XRMemoryReasoner { try await NativeAIRuntime.service.interpretMemory($0) }
             evidenceRecall = { try await reasoner.resolve($0,document:$1) }
             observeRecall = { reasoner.observe($0,answer:$1,document:$2) }
@@ -45,7 +47,7 @@ struct MyApp: App {
             services = remote
         }
         let weather = NativeWeatherLookup()
-        return MemoryTARSRuntime(underlying: MigratingTARSRuntime(remaining: services, weather: weather), evidenceRecall:evidenceRecall, observeRecall:observeRecall, prepareConversation:{ weather.observeInput($0) })
+        return MemoryTARSRuntime(underlying: MigratingTARSRuntime(remaining: services, weather: weather), evidenceRecall:evidenceRecall, memoryDialogue:memoryDialogue, observeRecall:observeRecall, prepareConversation:{ weather.observeInput($0) })
     }
 
     var body: some Scene {

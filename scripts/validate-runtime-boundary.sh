@@ -65,6 +65,7 @@ Path(sys.argv[1]).write_text('import Foundation\nenum AVCaptureDevice { enum Pos
 PYCODE
 run_check conversation-camera-parser "$OUT/camera-parser.swift" Tests/ConversationCameraParserChecks.swift
 run_check conversation-continuity MyApp/VoiceActivationPolicy.swift MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/ConversationContinuityChecks.swift
+run_check memory-conversation MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/MemoryConversationChecks.swift
 run_check frame-quality MyApp/FrameQuality.swift Tests/FrameQualityChecks.swift
 run_check video-frame-gate MyApp/SequentialSessionCamera.swift Tests/VideoFrameGateChecks.swift
 run_check sequential-vision MyApp/SequentialVisionPolicy.swift Tests/SequentialVisionChecks.swift

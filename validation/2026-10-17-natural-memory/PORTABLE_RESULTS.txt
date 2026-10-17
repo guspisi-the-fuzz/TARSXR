@@ -1,0 +1,63 @@
+Bloco 2 — validação local por etapas; Linux Swift 6.0.3, modo Swift 5.
+Não houve execução integral única aprovada na configuração Linux padrão: o runtime interrompeu com SIGILL em duas etapas, sem mensagem de precondition/assertion.
+
+
+Teste final do novo caminho, após o ajuste de referências sem foco explícito:
+PASS: 39 read-only conversational-memory routing, evidence, continuity, mutation isolation, expiry, cancellation and failure checks. Model outputs are fixtures; no live language-quality, API, microphone or TTS test.
+
+
+Demais checks aprovados antes da interrupção de persistência:
+PASS: actual camera parser preserves photo/selfie/Mel routing, explicit text detail, historical and nonvisual boundaries; no camera/API
+PASS: 89 conversation, provenance, retention, cancellation, routing and prepared-voice pipeline checks; simulated inputs only, no API/hardware
+PASS: deterministic dark, bright, sharp, blurred, flat, gradient and invalid frames; no AI or device
+PASS: video frame admission, duplicate requests/frames, invalid timestamps, cancellation and close; simulated frames only
+PASS: simulated frames, cadence, duplicate/in-flight rejection, age, change threshold, API cooldown and budget
+PASS: visual-description availability and shared admission; off, thermal, permissions, quality, stale frames, overlap, cooldown, unchanged scene and budget; no camera, network or speech
+PASS: shared speech cleanup, negation preservation and service routing
+PASS: 307 generic logic checks; renamed entities, exclusion, count, joins, negative evidence, contradictions, provenance and invalid plans
+PASS: synthetic interpreter contract, cited sources, invented-entity rejection, context isolation/revision reset; no writes or API
+PASS: local identity -> model follow-up, exclusions, no memory writes; online=false, calls=2
+PASS: mail intents, negations, message selection and plain-text MIME decoding
+PASS: progressive retry, capped rate, authorization pause, reset and recovery
+PASS: music commands, natural YouTube exits, negation, paused conversation and real HTML parser
+22 pronunciation checks PASS
+PASS: 167 voice checks, plus 1000 follow-ups and budget/capture boundary loops
+PASS: 1022 clock checks, including 1000 refreshes; no network or hardware
+PASS: new-process memory phase save
+PASS: new-process memory phase read
+PASS: new-process memory phase correct
+PASS: new-process memory phase read-corrected
+PASS: new-process memory phase delete
+PASS: new-process memory phase read-deleted
+
+Persistência: mesmo binário, afinidade em uma CPU, saída 0:
+PASS: new-process memory phase save
+PASS: new-process memory phase read
+PASS: new-process memory phase correct
+PASS: new-process memory phase read-corrected
+PASS: new-process memory phase delete
+PASS: new-process memory phase read-deleted
+PASS: 218 persistent memory/runtime checks; synthetic facts, no network or hardware
+
+
+Checks restantes, afinidade em uma CPU:
+PASS: 48 memory trace checks; no network or device
+PASS: 228 memory speech-intent checks; explicit commands, real temporary files, no ASR or device
+PASS: independent relation-memory process save
+PASS: independent relation-memory process read
+PASS: independent relation-memory process correct
+PASS: independent relation-memory process read-corrected
+PASS: independent relation-memory process delete
+PASS: independent relation-memory process read-deleted
+PASS: 384 relation-memory checks; explicit save, alias lookup, new processes; no network, microphone or device
+PASS: 32 remote runtime checks (injected transport; no network or hardware)
+PASS: remaining portable suites; one-CPU affinity on Linux. Apple checks not run.
+
+Método real do provedor extraído para scaffold de transporte simulado (sem SDK Apple):
+PASS: actual converseMemory method typecheck and mocked request/response cycle on Linux; not an Apple SDK or live API test.
+
+
+Análise sintática MyApp/*.swift e Tests/*.swift: PASS.
+Git diff --check e Bash syntax: PASS.
+
+Não foram feitos: URLProtocol/SDK Apple, builds Debug/Release Apple, ciclo Simulator, API paga real, microfone, TTS real ou aceitação semântica do modelo. O instalador executa a suíte completa no Mac; não contorna ou ignora falhas.

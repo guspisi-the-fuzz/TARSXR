@@ -38,6 +38,10 @@ final class MemoryTARSRuntime: TARSRuntime {
     private let observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)?
     private let logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)?
     private let evidenceRecall: (@MainActor (String, XRMemoryDocument) async throws -> MemoryRecallEvidence?)?
+    private let memoryDialogue: (@MainActor (MemoryDialogueRequest) async throws -> MemoryDialogueReply)?
+    private var usedMemoryDialogue = false
+    private var memoryDialogueFocus = ""
+    private var memoryClarification: (owner: String, revision: String, time: Double)?
     private var recallIdentity: String?
     private var focusedSubjectKey: String?
     private var focusTime = 0.0
@@ -63,12 +67,14 @@ final class MemoryTARSRuntime: TARSRuntime {
          pendingState: XRMemoryPendingState? = nil,
          logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil,
          evidenceRecall: (@MainActor (String, XRMemoryDocument) async throws -> MemoryRecallEvidence?)? = nil,
+         memoryDialogue: (@MainActor (MemoryDialogueRequest) async throws -> MemoryDialogueReply)? = nil,
          observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)? = nil,
          prepareConversation: (@MainActor (String) -> Void)? = nil) {
         self.prepareConversation = prepareConversation
         self.observeRecall = observeRecall
         self.logicalRecall = logicalRecall
         self.evidenceRecall = evidenceRecall
+        self.memoryDialogue = memoryDialogue
         self.underlying = underlying; self.memory = memory; self.uptime = uptime
         self.pendingState = pendingState ?? .shared
         traceMemory("runtime_ready")
@@ -139,7 +145,7 @@ final class MemoryTARSRuntime: TARSRuntime {
     func recordLocalExchange(question: String, answer: String, source: ConversationContext.Source, capturedAt: Double?) {
         if let doc = try? storage().load() { dialogue.synchronize(owner: doc.ownerID, revision: doc.revision) }
         else { dialogue.clear() }
-        if source != .memory { focusedSubjectKey = nil }
+        if source != .memory { focusedSubjectKey = nil; memoryClarification = nil }
         if source != .memory && source != .conversation { lastKeys = []; lastRecallAt = 0 }
         dialogue.append(question: question, answer: answer, source: source, now: uptime(), capturedAt: capturedAt)
     }
@@ -147,6 +153,7 @@ final class MemoryTARSRuntime: TARSRuntime {
     func converse(text: String, language: String, context: [String: Any]?) async throws -> String {
         guard !conversationBusy else { throw TARSClientError.ai("AI_BUSY") }
         conversationBusy = true; forwardedConversation = false
+        usedMemoryDialogue = false; memoryDialogueFocus = ""
         defer { conversationBusy = false }
         prepareConversation?(text)
         let before = try? storage().load()
@@ -154,9 +161,9 @@ final class MemoryTARSRuntime: TARSRuntime {
         else { dialogue.clear() }
         if let before {
             let identity = before.ownerID + "/" + before.revision
-            if recallIdentity != identity { lastKeys = []; lastRecallAt = 0; focusedSubjectKey = nil }
+            if recallIdentity != identity { lastKeys = []; lastRecallAt = 0; focusedSubjectKey = nil; memoryClarification = nil }
             recallIdentity = identity
-        } else { lastKeys = []; lastRecallAt = 0; focusedSubjectKey = nil; recallIdentity = nil }
+        } else { lastKeys = []; lastRecallAt = 0; focusedSubjectKey = nil; recallIdentity = nil; memoryClarification = nil }
         let normalizedQuestion = ConversationMemoryQuestion.clean(text)
         if normalizedQuestion != SpokenRequest.clean(text),
            text.range(of: #"(?i)^\s*n[aã]o\b"#, options: .regularExpression) != nil {
@@ -178,8 +185,11 @@ final class MemoryTARSRuntime: TARSRuntime {
                     observeRecall?(text,answer,after)
                 }
             }
-            if mutated || forwardedConversation { focusedSubjectKey = nil }
-            else if let document = try? storage().load() { updateRecallFocus(question: normalizedQuestion, document: document) }
+            if mutated || forwardedConversation { focusedSubjectKey = nil; memoryClarification = nil }
+            else if usedMemoryDialogue {
+                focusedSubjectKey = memoryDialogueFocus.isEmpty ? nil : memoryDialogueFocus
+                focusTime = uptime()
+            } else if let document = try? storage().load() { memoryClarification = nil; updateRecallFocus(question: normalizedQuestion, document: document) }
             if !mutated { dialogue.append(question: text, answer: answer, source: forwardedConversation ? .conversation : .memory, now: uptime()) }
         }
         return answer
@@ -217,7 +227,6 @@ final class MemoryTARSRuntime: TARSRuntime {
             }
             if index != nil { return "A lista de opções expirou ou mudou. Faça a pergunta novamente para eu conferir os registros atuais." }
         }
-        if !internalWake, let residence = try localResidenceFollowUp(text: text, store: store) { return residence }
         if !internalWake,
            !SpokenRequest.isServiceQuery(text),
            localRelationNameRecallSubject(text: text) != nil {
@@ -236,6 +245,24 @@ final class MemoryTARSRuntime: TARSRuntime {
                 return error.localizedDescription
             }
         }
+
+        if !internalWake, let memoryDialogue, pendingState.fact == nil, pendingState.suggestion == nil,
+           let request = try memoryDialogueRequest(text: text, language: language, store: store) {
+            let requestEpoch = conversationRevision
+            let generation = dialogue.generation
+            let reply = try await memoryDialogue(request).validated(for: request)
+            try Task.checkCancellation()
+            let current = try store.load()
+            guard current.ownerID == request.ownerID, current.revision == request.revision,
+                  conversationRevision == requestEpoch, dialogue.generation == generation else { throw XRMemoryError.changed }
+            usedMemoryDialogue = true
+            memoryDialogueFocus = reply.focusKey
+            memoryClarification = reply.status == .clarify ? (request.ownerID, request.revision, uptime()) : nil
+            lastKeys = reply.sourceKeys; lastRecallAt = uptime()
+            invalidateConversation()
+            return reply.speech.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if !internalWake, let residence = try localResidenceFollowUp(text: text, store: store) { return residence }
 
         if !internalWake, XRMemoryIntent.isQuestionLike(text) {
             switch XRMemoryIntent.parse(text) {
@@ -714,6 +741,86 @@ final class MemoryTARSRuntime: TARSRuntime {
             return true
         }
         return false
+    }
+
+    /// Select a bounded connected set of saved evidence, not a generated answer
+    /// that a second model would need to paraphrase. Explicit mutations never enter.
+    private func memoryDialogueRequest(text: String, language: String, store: XRPersistentMemory) throws -> MemoryDialogueRequest? {
+        let normalized = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "pt_BR"))
+        let duration = normalized.range(of: #"\bquanto tempo\b|\bhow long\b"#, options: .regularExpression) != nil &&
+            normalized.range(of: #"\b(previsao|chover|chove|chuva|temperatura|clima|weather|rain|email|cotacao)\b"#, options: .regularExpression) == nil
+        guard (!SpokenRequest.isServiceQuery(text) || duration), !VisualQuestionPolicy.explicitCurrent(text) else { return nil }
+        let intent = XRMemoryIntent.parse(text)
+        switch intent {
+        case .ordinary, .recall, .recallAttribute: break
+        default: return nil
+        }
+        let document = try store.load()
+        let now = uptime()
+        let clarificationIsCurrent = memoryClarification.map {
+            $0.owner == document.ownerID && $0.revision == document.revision &&
+            now.isFinite && now >= $0.time && now - $0.time <= 120
+        } ?? false
+        if !clarificationIsCurrent { memoryClarification = nil }
+        // Only a short non-question can complete the pending clarification;
+        // an unrelated new question must retain its normal routing.
+        let clarifyingReply = clarificationIsCurrent && !XRMemoryIntent.isQuestionLike(text) && (1...80).contains(text.count)
+        let readRequest = clarifyingReply || XRMemoryIntent.isQuestionLike(text) || ConversationPolicy.usesReference(text) ||
+            text.range(of: #"(?i)^(?:me\s+)?(?:fale|fala|conte|conta|explique|explica|tell|explain)\b"#, options: .regularExpression) != nil
+        guard readRequest else { return nil }
+        let query = " " + XRPersistentMemory.key(text) + " "
+        let validFocus = now.isFinite && now >= focusTime && now - focusTime <= 120 ? focusedSubjectKey : nil
+        let refersToPrevious = ConversationPolicy.usesReference(text) || duration
+        let recentMemoryReference = refersToPrevious && now.isFinite && now >= lastRecallAt &&
+            now - lastRecallAt <= 120 && dialogue.turns.last?.source == .memory
+        var referencedKeys = recentMemoryReference ? Set(lastKeys) : []
+        if refersToPrevious, let validFocus { referencedKeys.insert(validFocus) }
+        let parsedKeys: Set<String>
+        switch intent {
+        case .recall(let subject, _): parsedKeys = Set(store.facts(for: subject, document: document).map(\.key))
+        case .recallAttribute(let reference, _): parsedKeys = Set(store.facts(for: reference, document: document).map(\.key))
+        default: parsedKeys = []
+        }
+        var seeds = document.facts.filter { fact in
+            let aliases = XRMemoryIntent.referenceKeys(subject: fact.subject, statement: fact.statement).subtracting(document.forgotten)
+            return aliases.contains { query.contains(" " + $0 + " ") } || referencedKeys.contains(fact.key) || parsedKeys.contains(fact.key)
+        }
+        let explicitRead: Bool
+        switch intent { case .recall(_, let explicit): explicitRead = explicit
+        case .recallAttribute: explicitRead = true
+        default: explicitRead = false }
+        guard !seeds.isEmpty || explicitRead || ConversationPolicy.isPersonal(text) || clarifyingReply else { return nil }
+        // A broad personal question may have no literal name/alias to seed a
+        // search. Offer a bounded snapshot rather than pretending memory is empty.
+        if seeds.isEmpty { seeds = document.facts }
+        var connected = Set(seeds.map(\.key))
+        for _ in 0..<2 {
+            let selected = document.facts.filter { connected.contains($0.key) }
+            for fact in document.facts where !connected.contains(fact.key) {
+                let subject = " " + XRPersistentMemory.key(fact.subject) + " "
+                let statement = " " + XRPersistentMemory.key(fact.statement) + " "
+                if selected.contains(where: { other in
+                    let otherSubject = " " + XRPersistentMemory.key(other.subject) + " "
+                    return (" " + XRPersistentMemory.key(other.statement) + " ").contains(subject) || statement.contains(otherSubject)
+                }) { connected.insert(fact.key) }
+            }
+        }
+        let seedKeys = Set(seeds.map(\.key))
+        let ranked = document.facts.enumerated().filter { connected.contains($0.element.key) }.sorted { left, right in
+            func rank(_ fact: XRMemoryFact) -> Int {
+                if query.contains(" " + XRPersistentMemory.key(fact.subject) + " ") { return 0 }
+                return seedKeys.contains(fact.key) ? 1 : 2
+            }
+            let a = rank(left.element), b = rank(right.element)
+            return a == b ? left.offset < right.offset : a < b
+        }.map(\.element)
+        let facts = ranked.prefix(24).map { MemoryDialogueRequest.Fact(key: $0.key, subject: $0.subject, statement: $0.statement) }
+        let focus = validFocus.flatMap { key in facts.contains { $0.key == key } ? key : nil } ?? ""
+        let request = MemoryDialogueRequest(question: text, language: language, ownerID: document.ownerID,
+            revision: document.revision, facts: facts, dialogue: dialogue.payload(now: now), focusKey: focus,
+            omittedFactCount: max(0, ranked.count - facts.count))
+        _ = try request.encoded()
+        return request
     }
 
     /// A named subject is distinct from the facts cited to answer a question.
