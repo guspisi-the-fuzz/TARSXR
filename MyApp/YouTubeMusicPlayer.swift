@@ -15,6 +15,8 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
     private var playbackState = -1
     private var errorMessage: String?
     private var titleRequestedAt: Date?
+    private var pendingCommand: MusicCommand?
+    private var pageGeneration = UUID()
 
     override init() {
         super.init()
@@ -43,81 +45,112 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
     }
 
     func handle(_ command: MusicCommand) async -> String {
+        do { return try await execute(command).speech }
+        catch { return "Interrompi a espera do pedido de música." }
+    }
+
+    func cancelPendingCommand() {
+        titleRequestedAt = nil
+        guard let command = pendingCommand else { return }
+        generation = UUID(); pendingCommand = nil
+        if case .play = command, !isPlaying {
+            pageGeneration = UUID(); webView.stopLoading()
+            webView.loadHTMLString("", baseURL: nil); track = nil
+            status = "Carregamento interrompido"; playbackState = -1
+        }
+    }
+
+    func execute(_ command: MusicCommand) async throws -> LocalActionResult {
+        try Task.checkCancellation()
+        let id = UUID(); generation = id; pendingCommand = command
+        defer { if generation == id { pendingCommand = nil } }
         switch command {
         case .play(let query):
-            if query.isEmpty { titleRequestedAt = Date(); return "Qual música e artista você quer ouvir?" }
+            if query.isEmpty { titleRequestedAt = Date(); return LocalActionResult(.needsInput, "Qual música e artista você quer ouvir?") }
             titleRequestedAt = nil
-            let id = UUID(); generation = id
+            pageGeneration = UUID()
             status = "Buscando no YouTube…"; errorMessage = nil; isPlaying = false; playbackState = -1
             webView.loadHTMLString("", baseURL: nil); track = nil
             do {
                 let found = try await YouTubeSearch.find(query)
                 try Task.checkCancellation()
-                guard generation == id else { return "" }
+                guard generation == id else { throw CancellationError() }
                 track = found; status = "Carregando \(found.title)…"
                 // Wait for SwiftUI to mount the visible player before enabling autoplay.
                 for _ in 0..<20 {
                     if visible { break }
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                guard generation == id, visible else { return "Não consegui exibir o player de música." }
+                guard generation == id, visible else { return LocalActionResult(.failed, "Não consegui exibir o player de música.") }
                 let session = AVAudioSession.sharedInstance()
                 try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
                 try session.setActive(true)
                 let origin = "https://" + (Bundle.main.bundleIdentifier ?? "com.pisi.tarsxr")
-                webView.loadHTMLString(Self.page(videoID: found.id, origin: origin), baseURL: URL(string: origin))
+                webView.loadHTMLString(Self.page(videoID: found.id, origin: origin, token: pageGeneration.uuidString), baseURL: URL(string: origin))
                 for _ in 0..<100 {
                     try await Task.sleep(for: .milliseconds(200))
-                    guard generation == id else { return "" }
-                    if isPlaying { return "" } // Do not talk over the beginning of the song.
-                    if let errorMessage { return errorMessage }
+                    guard generation == id else { throw CancellationError() }
+                    if isPlaying { return LocalActionResult(.succeeded, "", observation: "O player confirmou a reprodução de " + found.title + ". Isso não verifica o som físico no alto-falante.", confirmation: "youtube.state.playing") } // Keep song playback silent.
+                    if let errorMessage { return LocalActionResult(.failed, errorMessage) }
                 }
                 status = "O YouTube não confirmou a reprodução. Use Play no vídeo."
-                return "O vídeo foi carregado, mas o YouTube não iniciou a reprodução. Toque em Play no vídeo."
+                return LocalActionResult(.unconfirmed, "O vídeo foi carregado, mas o YouTube não confirmou a reprodução. Toque em Play no vídeo.")
             } catch {
-                guard generation == id else { return "" }
+                if Task.isCancelled || error is CancellationError { if generation == id { cancelPendingCommand() }; throw CancellationError() }
+                guard generation == id else { throw CancellationError() }
                 status = "Não consegui carregar a música."
-                return "Não consegui carregar essa música no YouTube. Tente dizer o nome e o artista."
+                return LocalActionResult(.failed, "Não consegui carregar essa música no YouTube. Tente dizer o nome e o artista.")
             }
         case .pause:
-            guard track != nil else { return "Não há música aberta." }
+            guard track != nil else { return LocalActionResult(.unavailable, "Não há música aberta.") }
             do {
                 _ = try await webView.evaluateJavaScript("(()=>{player.pauseVideo();return true})()")
                 for _ in 0..<25 {
                     try await Task.sleep(for: .milliseconds(200))
-                    if playbackState == 2 { return "" } // The silence and visible status confirm pause without changing audio sessions.
+                    guard generation == id else { throw CancellationError() }
+                    if playbackState == 2 { return LocalActionResult(.succeeded, "", observation: "O player confirmou a pausa.", confirmation: "youtube.state.paused") }
                 }
-                return "O YouTube ainda não confirmou a pausa."
-            } catch { return "Não consegui pausar o vídeo agora." }
+                return LocalActionResult(.unconfirmed, "O YouTube ainda não confirmou a pausa.")
+            } catch {
+                if Task.isCancelled || error is CancellationError || generation != id { if generation == id { cancelPendingCommand() }; throw CancellationError() }
+                return LocalActionResult(.failed, "Não consegui pausar o vídeo agora.") }
         case .resume:
-            guard track != nil else { return "Diga o nome da música que você quer ouvir." }
+            guard track != nil else { return LocalActionResult(.needsInput, "Diga o nome da música que você quer ouvir.") }
             errorMessage = nil
             do {
                 _ = try await webView.evaluateJavaScript("(()=>{player.playVideo();return true})()")
                 for _ in 0..<25 {
                     try await Task.sleep(for: .milliseconds(200))
-                    if isPlaying { return "" }
-                    if let errorMessage { return errorMessage }
+                    guard generation == id else { throw CancellationError() }
+                    if isPlaying { return LocalActionResult(.succeeded, "", observation: "O player confirmou a reprodução.", confirmation: "youtube.state.playing") }
+                    if let errorMessage { return LocalActionResult(.failed, errorMessage) }
                 }
-                return "O YouTube não confirmou a retomada. Toque em Play no vídeo."
-            } catch { return "Não consegui retomar o vídeo agora." }
+                return LocalActionResult(.unconfirmed, "O YouTube não confirmou a retomada. Toque em Play no vídeo.")
+            } catch {
+                if Task.isCancelled || error is CancellationError || generation != id { if generation == id { cancelPendingCommand() }; throw CancellationError() }
+                return LocalActionResult(.failed, "Não consegui retomar o vídeo agora.") }
         case .restart:
-            guard track != nil else { return "Diga o nome da música que você quer ouvir." }
+            guard track != nil else { return LocalActionResult(.needsInput, "Diga o nome da música que você quer ouvir.") }
             errorMessage = nil
             do {
                 _ = try await webView.evaluateJavaScript("(()=>{player.seekTo(0,true);player.playVideo();return true})()")
                 for _ in 0..<25 {
                     try await Task.sleep(for: .milliseconds(200))
+                    guard generation == id else { throw CancellationError() }
                     let restarted = try await webView.evaluateJavaScript("player.getPlayerState()===1 && player.getCurrentTime()<3")
-                    if restarted as? Bool == true { return "" }
-                    if let errorMessage { return errorMessage }
+                    try Task.checkCancellation()
+                    guard generation == id else { throw CancellationError() }
+                    if restarted as? Bool == true { return LocalActionResult(.succeeded, "", observation: "O player confirmou reprodução no início da faixa.", confirmation: "youtube.playing.position.below3s") }
+                    if let errorMessage { return LocalActionResult(.failed, errorMessage) }
                 }
-                return "O YouTube ainda não confirmou o reinício da música."
-            } catch { return "Não consegui reiniciar o vídeo agora." }
+                return LocalActionResult(.unconfirmed, "O YouTube ainda não confirmou o reinício da música.")
+            } catch {
+                if Task.isCancelled || error is CancellationError || generation != id { if generation == id { cancelPendingCommand() }; throw CancellationError() }
+                return LocalActionResult(.failed, "Não consegui reiniciar o vídeo agora.") }
         case .stop:
-            generation = UUID(); titleRequestedAt = nil; playbackState = -1; errorMessage = nil
+            pageGeneration = UUID(); titleRequestedAt = nil; playbackState = -1; errorMessage = nil
             webView.loadHTMLString("", baseURL: nil); track = nil; isPlaying = false; status = ""
-            return "Música encerrada."
+            return LocalActionResult(.succeeded, "Música encerrada.", confirmation: "local.player.cleared")
         }
     }
 
@@ -143,7 +176,24 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
         player.isPlaying = false
         guard MusicSpeechPolicy.accepts("Quem é a gata?",musicActive:player.isPlaying) else { return "FAIL: paused player blocks conversation" }
         _ = await player.handle(.stop)
-        return "PASS: 5 natural exits through actual player; track cleared (window condition false), generation cancelled, title prompt cleared, paused/exited conversation enabled; no network/audio"
+        do {
+            let absent = try await player.execute(.pause)
+            guard absent.status == .unavailable else { return "FAIL: absent player reported success" }
+            let prompt = try await player.execute(.play(""))
+            guard prompt.status == .needsInput else { return "FAIL: title prompt reported success" }
+            player.track = YouTubeTrack(id: "abcdefghijk", title: "Pending fixture")
+            player.isPlaying = false; player.pendingCommand = .play("fixture")
+            let oldPage = player.pageGeneration
+            player.cancelPendingCommand()
+            guard player.track == nil, player.pageGeneration != oldPage else { return "FAIL: pending playback survived cancellation" }
+            player.track = YouTubeTrack(id: "abcdefghijk", title: "Playing fixture")
+            player.isPlaying = true; player.pendingCommand = .play("fixture")
+            player.cancelPendingCommand()
+            guard player.track != nil, player.isPlaying else { return "FAIL: cancelling wait stopped established playback" }
+            let cleared = try await player.execute(.stop)
+            guard cleared.status == .succeeded, !cleared.confirmation.isEmpty, player.track == nil else { return "FAIL: stop lacks confirmed receipt" }
+        } catch { return "FAIL: music receipt/cancellation fixture" }
+        return "PASS: actual music receipts, needs-input/unavailable distinction, pending cancellation without undoing playback, and 5 natural exits through actual player; track cleared (window condition false), generation cancelled, title prompt cleared, paused/exited conversation enabled; no network/audio"
     }
     #endif
 
@@ -153,7 +203,7 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let value = message.body as? [String: Any], let kind = value["kind"] as? String,
-              value["id"] as? String == track?.id else { return }
+              MusicCallbackPolicy.accepts(value, videoID: track?.id, token: pageGeneration.uuidString) else { return }
         #if DEBUG
         var diagnostic = value
         let session = AVAudioSession.sharedInstance()
@@ -180,11 +230,11 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
         }
     }
 
-    static func page(videoID: String, origin: String) -> String {
+    static func page(videoID: String, origin: String, token: String) -> String {
         // IDs and origin are internal validated values; no user query is executed as script.
         """
         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,#player{margin:0;width:100%;height:100%;background:black}</style></head><body><div id="player"></div>
-        <script>var player;function report(k,v){webkit.messageHandlers.music.postMessage({kind:k,value:v,id:'\(videoID)',rate:player?player.getPlaybackRate():null,volume:player?player.getVolume():null})}
+        <script>var player;function report(k,v){webkit.messageHandlers.music.postMessage({kind:k,value:v,id:'\(videoID)',token:'\(token)',rate:player?player.getPlaybackRate():null,volume:player?player.getVolume():null})}
         function onYouTubeIframeAPIReady(){player=new YT.Player('player',{videoId:'\(videoID)',playerVars:{playsinline:1,autoplay:1,origin:'\(origin)'},events:{onReady:function(e){e.target.setPlaybackRate(1);e.target.setVolume(100);\(ProcessInfo.processInfo.environment["TARS_YOUTUBE_MUTED_PROBE"] == "1" ? "e.target.mute();" : "")e.target.playVideo();setInterval(function(){if([1,2].includes(player.getPlayerState()))report('time',player.getCurrentTime())},2000)},onStateChange:function(e){report('state',e.data)},onError:function(e){report('error',e.data)},onAutoplayBlocked:function(){report('blocked',0)}}})}</script><script src="https://www.youtube.com/iframe_api"></script></body></html>
         """
     }

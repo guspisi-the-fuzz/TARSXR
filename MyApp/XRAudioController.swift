@@ -70,6 +70,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     var acceptsMediaSpeech: ((String) -> Bool)?
     var keepsMediaSessionActive: (() -> Bool)?
     var handlesLocally: ((String) -> Bool)?
+    var onLocalRequestCancelled: (() -> Void)?
+    var preserveLocalRequestDuringMediaInterruption: (() -> Bool)?
     var respond: ((String, String) async throws -> String)?
     var wakeRespond: ((String, String) async throws -> String)?
     var visualRespond: ((String) async throws -> String)?
@@ -158,12 +160,12 @@ private let bluetooth = BluetoothManager()
         await start()
     }
 
-    func suspendHandsFree() {
+    func suspendHandsFree(preservingLocalRequest: Bool = false) {
         resumeAfterInterruption = false
         handsFree = false
         restartTask?.cancel(); restartTask = nil
         voicePolicy.reset()
-        cancel(message: "Escuta pausada fora do app ou durante interrupção.")
+        cancel(message: "Escuta pausada fora do app ou durante interrupção.", preservingLocalRequest: preservingLocalRequest)
     }
 
     /// WebKit may interrupt native capture without an end notification. Only
@@ -205,7 +207,7 @@ private let bluetooth = BluetoothManager()
                     self.resumeAfterInterruption = self.resumeAfterInterruption || self.handsFree
                     self.handsFree = false
                     self.restartTask?.cancel(); self.restartTask = nil
-                    self.cancel(message: "Escuta interrompida pelo sistema de áudio.")
+                    self.cancel(message: "Escuta interrompida pelo sistema de áudio.", preservingLocalRequest: self.preserveLocalRequestDuringMediaInterruption?() == true)
                     self.writeVoiceDiagnostic(failedStage: "AUDIO_INTERRUPTION")
                 } else if self.resumeAfterInterruption && UIApplication.shared.applicationState == .active {
                     self.resumeAfterInterruption = false
@@ -788,7 +790,7 @@ private let bluetooth = BluetoothManager()
             try AVAudioSession.sharedInstance().setActive(true)
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.requiresOnDeviceRecognition = true; req.shouldReportPartialResults = true
-            req.contextualStrings = ["TARS escuta", "TARS pare de falar", "TARS listen"]
+            req.contextualStrings = ["TARS escuta", "TARS pare de falar", "TARS listen", "TARS cancela o pedido"]
             let node = engine.inputNode; let format = node.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else { return }
             request = req; recognizer = local
@@ -926,11 +928,14 @@ private let bluetooth = BluetoothManager()
         } catch { fail("Saída de áudio indisponível: \(error.localizedDescription)") }
     }
 
-    func cancel(message: String = "Interação encerrada.") {
+    func cancel(message: String = "Interação encerrada.", preservingLocalRequest: Bool = false) {
         if state == "SPEAKING" { echoPolicy.endedAt = ProcessInfo.processInfo.systemUptime }
         let pendingPart = partCompletion; partCompletion = nil
         pendingPart?.resume(throwing: CancellationError())
-        conversationTask?.cancel(); conversationTask = nil
+        if !preservingLocalRequest {
+            conversationTask?.cancel(); conversationTask = nil
+            onLocalRequestCancelled?()
+        }
         speechTask?.cancel(); speechTask = nil
         audioPlayer?.stop(); audioPlayer = nil
         streamedPlayer?.stop(); streamedPlayer = nil
@@ -1089,6 +1094,8 @@ extension XRAudioController {
         }
         defer { audio.suspendHandsFree() }
         do {
+            let musicChecks = await YouTubeMusicPlayer.runExitChecks()
+            try require(musicChecks.hasPrefix("PASS:"), musicChecks)
             // Silent PCM uses the real AVAudioEngine completion path, no API/microphone.
             let buffered = try BufferedVoicePlayer()
             defer { buffered.stop() }
@@ -1381,11 +1388,39 @@ extension XRAudioController {
             interrupted.transcript = "TARS, uma pergunta"
             interrupted.finish()
             try await waitFor { delayedTurn != nil }
+            var cancelledLocalRequests = 0
+            interrupted.onLocalRequestCancelled = { cancelledLocalRequests += 1 }
             interrupted.interruptAndListen()
+            try require(cancelledLocalRequests == 1, "Audio interruption did not notify the local execution owner")
             delayedTurn?.resume(returning: "Late cancelled answer"); delayedTurn = nil
             try await waitFor { interrupted.state == "LISTENING" }
             try require(interrupted.handsFree && interrupted.voicePolicy.awake && interruptedOutput.isEmpty,
                         "Interruption lost attention or delivered a cancelled answer")
+            let handoff = XRAudioController()
+            defer { handoff.suspendHandsFree() }
+            handoff.simulatedCapture = {}
+            handoff.simulatedOutput = { _ in }
+            var handoffPending: CheckedContinuation<String, Never>?
+            var handoffCancelled = false
+            var handoffCompleted = false
+            var handoffCancellationNotices = 0
+            handoff.respond = { _, _ in
+                let answer = await withCheckedContinuation { handoffPending = $0 }
+                handoffCancelled = Task.isCancelled; handoffCompleted = true
+                return answer
+            }
+            await handoff.enableHandsFree()
+            handoff.transcript = "TARS, um pedido local"
+            handoff.finish()
+            try await waitFor { handoffPending != nil }
+            handoff.onLocalRequestCancelled = { handoffCancellationNotices += 1 }
+            handoff.handsFree = false
+            handoff.cancel(message: "Media handoff fixture", preservingLocalRequest: true)
+            handoff.suspendHandsFree(preservingLocalRequest: true)
+            handoffPending?.resume(returning: "Local receipt after handoff"); handoffPending = nil
+            try await waitFor { handoffCompleted }
+            try require(!handoffCancelled && handoffCancellationNotices == 0,
+                        "Media handoff cancelled the local music owner before its confirmation")
             let echoAudio = XRAudioController()
             defer { echoAudio.suspendHandsFree() }
             echoAudio.simulatedCapture = {}
@@ -1402,7 +1437,7 @@ extension XRAudioController {
             try await waitFor { echoAudio.state == "LISTENING" }
             try require(echoRequests == 0 && echoAudio.voicePolicy.awake,
                         "Spoken echo reached general conversation or revoked attention")
-            return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause; local execution cancellation hook and actual music receipts/cancellation and media-handoff ownership. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

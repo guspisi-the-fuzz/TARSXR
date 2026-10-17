@@ -109,40 +109,57 @@ import Network
         return "PASS: XR Keychain credential, Yahoo TLS login, read-only inbox, unread query and latest-message fetch. No credentials or message contents exported."
     }
     #endif
+    func cancelPendingQuery() {
+        guard busy else { return }
+        generation = UUID(); active?.close()
+    }
+
     func handle(_ command: MailCommand) async -> String {
-        if command == .gmailUnavailable { return "O Gmail não está integrado. O e-mail do TARS usa o Yahoo." }
-        if command == .clarify { return "Posso consultar os e-mails não lidos ou ler o e-mail mais recente do Yahoo. Qual dessas opções você quer?" }
-        if command == .connect { showsSetup = true; return "Abra a configuração do Yahoo na tela do TARS e preencha sua conta e a senha de aplicativo." }
+        do { return try await execute(command).speech }
+        catch { return "Interrompi a espera da consulta ao Yahoo." }
+    }
+
+    func execute(_ command: MailCommand) async throws -> LocalActionResult {
+        try Task.checkCancellation()
+        if command == .gmailUnavailable { return LocalActionResult(.unavailable, "O Gmail não está integrado. O e-mail do TARS usa o Yahoo.") }
+        if command == .clarify { return LocalActionResult(.needsInput, "Posso consultar os e-mails não lidos ou ler o e-mail mais recente do Yahoo. Qual dessas opções você quer?") }
+        if command == .connect { showsSetup = true; return LocalActionResult(.needsInput, "Abra a configuração do Yahoo na tela do TARS e preencha sua conta e a senha de aplicativo.") }
         if command == .disconnect {
             generation = UUID(); active?.close()
             let result = SecItemDelete(query as CFDictionary)
-            guard result == errSecSuccess || result == errSecItemNotFound else { return "Não consegui remover a credencial local do Yahoo." }
-            status = "Yahoo desconectado"; return "Desconectei o Yahoo deste XR."
+            guard result == errSecSuccess || result == errSecItemNotFound else { return LocalActionResult(.failed, "Não consegui remover a credencial local do Yahoo.") }
+            status = "Yahoo desconectado"; return LocalActionResult(.succeeded, "Desconectei o Yahoo deste XR.", confirmation: "keychain.delete.accepted")
         }
-        guard !busy else { return "Já estou consultando o Yahoo. Aguarde um instante." }
+        guard !busy else { return LocalActionResult(.unconfirmed, "Já estou consultando o Yahoo. Aguarde um instante.") }
         do {
-            guard let credentials = try load() else { showsSetup = true; return "Primeiro conecte sua conta Yahoo na tela do TARS." }
+            guard let credentials = try load() else { showsSetup = true; return LocalActionResult(.needsInput, "Primeiro conecte sua conta Yahoo na tela do TARS.") }
             busy = true
             let operation = generation, client = YahooIMAP(); active = client
             defer { client.close(); active = nil; busy = false }
-            try await client.open(); try await client.login(email: credentials.email, password: credentials.password)
+            try Task.checkCancellation()
+            try await client.open(); try Task.checkCancellation(); try await client.login(email: credentials.email, password: credentials.password)
+            try Task.checkCancellation()
             let frame = try await client.command(command == .unread ? "UID SEARCH UNSEEN" : "UID SEARCH ALL")
             let ids = YahooWire.ids(frame)
-            guard operation == generation else { return "Consulta cancelada." }
-            if ids.isEmpty { return command == .unread ? "Não há e-mails não lidos na caixa de entrada do Yahoo." : "A caixa de entrada do Yahoo está vazia." }
+            guard operation == generation else { throw CancellationError() }
+            if ids.isEmpty { return LocalActionResult(.succeeded, command == .unread ? "Não há e-mails não lidos na caixa de entrada do Yahoo." : "A caixa de entrada do Yahoo está vazia.", confirmation: "imap.search.completed") }
             var results = [String]()
             for id in ids.suffix(command == .unread ? 3 : 1).reversed() {
                 let section = command == .unread ? "HEADER.FIELDS (FROM SUBJECT DATE)" : ""
                 // PEEK preserves unread state. Fetch only a bounded prefix of large messages.
+                try Task.checkCancellation()
                 let response = try await client.command("UID FETCH \(id) (BODY.PEEK[\(section)]<0.65536>)")
                 guard let bytes = response.literals.first else { throw YahooWire.Failure.invalid }
                 let raw = String(data: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
                 results.append(YahooMessage.summary(raw, includeBody: command == .readLatest))
             }
-            guard operation == generation else { return "Consulta cancelada." }
+            guard operation == generation else { throw CancellationError() }
             status = "Yahoo conectado"
-            return (command == .unread ? "Há \(ids.count) e-mails não lidos na caixa de entrada do Yahoo. Vou listar os \(results.count) mais recentes. " : "E-mail mais recente do Yahoo. ") + results.joined(separator: " ")
-        } catch { return "Não consegui consultar o Yahoo agora. Verifique a internet e a autorização da conta na configuração do Yahoo." }
+            return LocalActionResult(.succeeded, (command == .unread ? "Há \(ids.count) e-mails não lidos na caixa de entrada do Yahoo. Vou listar os \(results.count) mais recentes. " : "E-mail mais recente do Yahoo. ") + results.joined(separator: " "), confirmation: "imap.peek.completed")
+        } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            return LocalActionResult(.failed, "Não consegui consultar o Yahoo agora. Verifique a internet e a autorização da conta na configuração do Yahoo.")
+        }
     }
 }
 

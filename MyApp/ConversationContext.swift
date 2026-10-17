@@ -97,7 +97,7 @@ enum VoiceInterruptionPolicy {
     }
     static func command(in raw: String) -> String? {
         let text = normalized(raw)
-        let pattern = #"\b"# + SpokenRequest.wakeAliasPattern + #"\s+(escuta|me escuta|pare de falar|para de falar|listen|stop speaking)$"#
+        let pattern = #"\b"# + SpokenRequest.wakeAliasPattern + #"\s+(escuta|me escuta|pare de falar|para de falar|listen|stop speaking|cancela o pedido|cancele o pedido|cancelar pedido|cancel request|cancel the request)$"#
         guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
         return String(text[range]).replacingOccurrences(of: #"^"# + SpokenRequest.wakeAliasPattern + #"\s+"#, with: "tars ", options: .regularExpression)
     }

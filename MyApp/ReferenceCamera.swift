@@ -411,10 +411,12 @@ enum VoiceCameraAction {
         try await SequentialVision.shared.prepareStill()
         defer { SequentialVision.shared.finishStill() }
         let image = try await VoiceStillCamera.capture(position: command.position)
+        try Task.checkCancellation()
 
         switch command.kind {
         case .photo, .selfie:
             let saved = try VoicePhotoStore.save(image, kind: command.kind)
+            try Task.checkCancellation()
             try await VoicePhotoLibrary.save(image)
             return saved.spokenConfirmation
 
@@ -731,15 +733,12 @@ struct ExternalAccessCommand: Equatable {
 @MainActor
 enum ExternalAccessAction {
     static func perform(command: ExternalAccessCommand) async -> String {
-        let message = command.spokenConfirmation
-        let primary = command.primaryURL
-        let fallback = command.fallbackURL
-        Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
-            let opened = await open(primary)
-            if !opened, let fallback { _ = await open(fallback) }
-        }
-        return message
+        do { return try await execute(command: command).speech }
+        catch { return "Interrompi a espera da abertura solicitada. Isso não fecha um aplicativo que já tenha aberto." }
+    }
+
+    static func execute(command: ExternalAccessCommand) async throws -> LocalActionResult {
+        try await ExternalHandoff.execute(primary: command.primaryURL, fallback: command.fallbackURL, open: { await open($0) })
     }
 
     private static func open(_ url: URL) async -> Bool {

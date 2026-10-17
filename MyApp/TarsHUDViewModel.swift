@@ -12,6 +12,8 @@ final class TarsHUDViewModel: ObservableObject {
     @Published var computeRows: [(String, String)] = []
     @Published var logLine = "BOOTING..."
     @Published var commandStatus = ""
+    @Published private(set) var localActionStatus = ""
+    private let localActions = LocalActionCoordinator()
 
     @Published var motionStatus = "Desconhecido"
     @Published var safetyStatus = "Desconhecida"
@@ -34,6 +36,42 @@ final class TarsHUDViewModel: ObservableObject {
 
     init(runtime: any TARSRuntime) {
         self.runtime = runtime
+        localActions.changed = { [weak self] event in
+            guard let self else { return }
+            switch event.phase {
+            case .requested: self.localActionStatus = "Pedido recebido"
+            case .running: self.localActionStatus = "Executando pedido"
+            case .succeeded: self.localActionStatus = "Resultado confirmado"
+            case .failed: self.localActionStatus = "Falha no pedido"
+            case .unconfirmed: self.localActionStatus = "Resultado não confirmado"
+            case .needsInput: self.localActionStatus = "Aguardando sua informação"
+            case .unavailable: self.localActionStatus = "Recurso indisponível"
+            case .cancelled: self.localActionStatus = "Espera interrompida · resultado não confirmado"
+            }
+            let category: String
+            switch event.kind { case .mail: category = "Yahoo"; case .music: category = "Música"; case .photo: category = "Fotografia"; case .external: category = "Abertura" }
+            self.localActionStatus = category + " · " + self.localActionStatus
+            if let result = event.result {
+                let source: ConversationContext.Source
+                switch event.kind { case .mail: source = .mail; case .music: source = .music; case .photo: source = .camera; case .external: source = .external }
+                self.runtime.recordLocalExchange(question: event.question, answer: String(("Pedido " + event.id.uuidString + ". " + result.historyText).prefix(2000)), source: source, capturedAt: nil)
+            }
+        }
+    }
+
+    func performLocalAction(question: String, kind: LocalActionCoordinator.Kind,
+                            operation: @escaping @MainActor () async throws -> LocalActionResult) async throws -> String {
+        try await localActions.run(kind: kind, question: question, operation: operation).speech
+    }
+
+    var activeLocalActionKind: LocalActionCoordinator.Kind? { localActions.activeKind }
+    func cancelLocalAction(includingAwaitingInput: Bool = false) -> LocalActionCoordinator.Kind? { localActions.cancel(includingAwaitingInput: includingAwaitingInput) }
+
+    func localActionAnswer(for question: String) -> String? {
+        guard LocalActionStatusQuestion.matches(question) else { return nil }
+        let answer = localActions.statusAnswer()
+        runtime.recordLocalExchange(question: question, answer: answer, source: .external, capturedAt: nil)
+        return answer
     }
 
     func streamSpeech(text: String, receive: @escaping @MainActor (Data) throws -> Void) async throws {

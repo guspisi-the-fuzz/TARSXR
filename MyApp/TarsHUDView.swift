@@ -50,6 +50,9 @@ struct TarsHUDView: View {
                     }.padding(.horizontal, 12).fixedSize(horizontal: false, vertical: true)
                 }
 
+                if !model.localActionStatus.isEmpty {
+                    Text(model.localActionStatus).font(.caption2).lineLimit(2).padding(.horizontal, 12)
+                }
                 if music.track != nil {
                     YouTubeMusicView(player: music).frame(height: 230)
                         .onAppear { music.visible = true }
@@ -223,36 +226,45 @@ struct TarsHUDView: View {
             audio.mediaInterruptionPhrase = { text in MusicInterruption.phrase(in: text, mediaActive: music.track != nil) }
             audio.acceptsMediaSpeech = { text in MusicSpeechPolicy.accepts(text, musicActive: music.isPlaying) }
             audio.keepsMediaSessionActive = { music.track != nil }
-            audio.handlesLocally = { text in music.command(for: text) != nil || MailCommand.parse(text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
+            audio.preserveLocalRequestDuringMediaInterruption = { model.activeLocalActionKind == .music || model.activeLocalActionKind == .external }
+            audio.onLocalRequestCancelled = {
+                if let kind = model.cancelLocalAction() {
+                    if kind == .mail { yahoo.cancelPendingQuery() }
+                    if kind == .music { music.cancelPendingCommand() }
+                }
+            }
+            audio.handlesLocally = { text in LocalActionStatusQuestion.matches(text) || LocalActionCancellation.matches(text) || music.command(for: text) != nil || MailCommand.parse(text) != nil || VoiceCameraCommand.parse(text) != nil || ExternalAccessCommand.parse(text) != nil }
             audio.respond = { text, language in
+                if let answer = model.localActionAnswer(for: text) { return answer }
+                if LocalActionCancellation.matches(text) {
+                    if let kind = model.cancelLocalAction(includingAwaitingInput: true) {
+                        if kind == .mail { yahoo.cancelPendingQuery() }
+                        if kind == .music { music.cancelPendingCommand() }
+                        return "Interrompi a espera desse pedido. Uma ação já efetuada não foi desfeita."
+                    }
+                    return "Não há pedido local em execução para interromper."
+                }
                 if let command = MailCommand.parse(text) {
-                    let answer = await yahoo.handle(command)
-                    try Task.checkCancellation()
-                    model.recordLocalExchange(question: text, answer: answer, source: .mail)
-                    return answer
+                    return try await model.performLocalAction(question: text, kind: .mail) { try await yahoo.execute(command) }
                 }
                 if let command = music.command(for: text) {
-                    let answer = await music.handle(command)
-                    try Task.checkCancellation()
-                    model.recordLocalExchange(question: text, answer: answer, source: .music)
-                    return answer
+                    return try await model.performLocalAction(question: text, kind: .music) { try await music.execute(command) }
                 }
                 if let camera = VoiceCameraCommand.parse(text) {
-                    let answer = try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
-                    try Task.checkCancellation()
                     if camera.kind == .photo || camera.kind == .selfie {
-                        model.recordLocalExchange(question: text, answer: answer, source: .camera)
+                        return try await model.performLocalAction(question: text, kind: .photo) {
+                            let answer = try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
+                            try Task.checkCancellation()
+                            return LocalActionResult(.succeeded, answer, confirmation: "photo.local.and.library.saved")
+                        }
                     }
-                    return answer
+                    return try await VoiceCameraAction.captureAndDescribe(command: camera, model: model)
                 }
                 if SpokenRequest.isServiceQuery(text) {
                     return try await model.converse(text: text, language: language)
                 }
                 if let external = ExternalAccessCommand.parse(text) {
-                    let answer = await ExternalAccessAction.perform(command: external)
-                    try Task.checkCancellation()
-                    model.recordLocalExchange(question: text, answer: answer, source: .external)
-                    return answer
+                    return try await model.performLocalAction(question: text, kind: .external) { try await ExternalAccessAction.execute(command: external) }
                 }
                 return try await model.converse(text: text, language: language)
             }
@@ -271,14 +283,14 @@ struct TarsHUDView: View {
                 await audio.enableHandsFree()
             } else if scenePhase == .background {
                 music.pauseForBackground()
-                audio.suspendHandsFree()
+                audio.suspendHandsFree(preservingLocalRequest: model.activeLocalActionKind == .external)
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { SequentialVision.shared.stop("APP_INACTIVE") }
             if manualDiagnostics && phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
         }
-        .onDisappear { audio.suspendHandsFree(); SequentialVision.shared.stop() }
+        .onDisappear { audio.suspendHandsFree(preservingLocalRequest: model.activeLocalActionKind == .external); SequentialVision.shared.stop() }
     }
 }
 
