@@ -77,6 +77,8 @@ final class XRAudioController: NSObject, ObservableObject, AVSpeechSynthesizerDe
     private var tapInstalled = false
     
 private let bluetooth = BluetoothManager()
+    private var echoPolicy = VoiceEchoPolicy()
+    private var captureStartedAt = ProcessInfo.processInfo.systemUptime
     private var generation = UUID()
     private var captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime)
     private var utterance: AVSpeechUtterance?
@@ -137,6 +139,18 @@ private let bluetooth = BluetoothManager()
                     self?.endOnlineTrial()
                 }
             }
+        }
+        var requestLocalPermission = continuousConversation && SFSpeechRecognizer.authorizationStatus() == .notDetermined
+        #if DEBUG
+        if simulatedCapture != nil { requestLocalPermission = false }
+        #endif
+        if requestLocalPermission {
+            // This optional local permission enables interruption only; denial must
+            // never revoke the explicitly selected online conversational path.
+            _ = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            }
+            guard UIApplication.shared.applicationState == .active else { return }
         }
         handsFree = true
         useAI = true
@@ -216,6 +230,7 @@ private let bluetooth = BluetoothManager()
         bluetoothDevice = bluetooth.deviceName
         #if DEBUG
         if let simulatedCapture {
+            captureStartedAt = ProcessInfo.processInfo.systemUptime
             state = "LISTENING"
             status = voicePolicy.awaitingRequest ? "LISTENING" : "WAITING_WAKE"
             simulatedCapture()
@@ -278,6 +293,7 @@ private let bluetooth = BluetoothManager()
             req.requiresOnDeviceRecognition = handsFree
             req.contextualStrings = ["TARS", "TARS pause", "TARS pausa", "TARS pare a música", "TARS stop", "TARS continua com a música", "TARS play the music", "TARS pause the music"]
             request = req
+            captureStartedAt = ProcessInfo.processInfo.systemUptime
             transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime, silenceSeconds: continuousConversation ? 1.2 : 2.2)
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 req.append(buffer)
@@ -380,6 +396,7 @@ private let bluetooth = BluetoothManager()
             recording.isMeteringEnabled = true
             guard recording.record() else { fail("Não foi possível abrir o microfone."); return }
             inputName = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
+            captureStartedAt = ProcessInfo.processInfo.systemUptime
             transcript = ""; level = 0; captureWindow = VoiceCaptureWindow(now: ProcessInfo.processInfo.systemUptime, silenceSeconds: continuousConversation ? 1.2 : 2.2)
             state = "LISTENING"; status = "LISTENING"
             if voiceProgress.isEmpty { voiceProgress = "Capturando áudio; faça uma pausa ao terminar." }
@@ -573,6 +590,11 @@ private let bluetooth = BluetoothManager()
         respond: ((String, String) async throws -> String)? = nil
     ) -> String? {
         lastHeard = String(text.prefix(300))
+        if handsFree && echoPolicy.isEcho(text, captureStarted: captureStartedAt) {
+            transcript = ""
+            cancel(message: "Estou ouvindo sua próxima pergunta.")
+            return nil
+        }
         guard handsFree else { return text }
         // The explicit visual session already grants conversational attention.
         // Its owner bounds duration and questions and clears this closure on stop.
@@ -671,6 +693,7 @@ private let bluetooth = BluetoothManager()
     }
 
     private func speak(_ text: String) {
+        echoPolicy.lastOutput = text
         #if DEBUG
         if simulatedOutput != nil && !testNaturalVoice { speakLocally(text); return }
         #endif
@@ -904,6 +927,7 @@ private let bluetooth = BluetoothManager()
     }
 
     func cancel(message: String = "Interação encerrada.") {
+        if state == "SPEAKING" { echoPolicy.endedAt = ProcessInfo.processInfo.systemUptime }
         let pendingPart = partCompletion; partCompletion = nil
         pendingPart?.resume(throwing: CancellationError())
         conversationTask?.cancel(); conversationTask = nil
@@ -1221,7 +1245,7 @@ extension XRAudioController {
             try require(audio.lastHeard == "conversa ambiente" && audio.voiceProgress.contains("não identifiquei"),
                         "Ignored wake must retain useful feedback")
 
-            audio.transcript = "Ei TARS"
+            audio.transcript = "TARS, wake up"
             audio.finish()
             try await waitFor { audio.state == "SPEAKING" }
             try require(audio.voicePolicy.awaitingRequest && requests.isEmpty && outputs.count == 1,
@@ -1362,6 +1386,22 @@ extension XRAudioController {
             try await waitFor { interrupted.state == "LISTENING" }
             try require(interrupted.handsFree && interrupted.voicePolicy.awake && interruptedOutput.isEmpty,
                         "Interruption lost attention or delivered a cancelled answer")
+            let echoAudio = XRAudioController()
+            defer { echoAudio.suspendHandsFree() }
+            echoAudio.simulatedCapture = {}
+            var echoRequests = 0
+            echoAudio.simulatedOutput = { _ in }
+            echoAudio.respond = { _, _ in echoRequests += 1; return "Uma resposta nova." }
+            await echoAudio.enableHandsFree()
+            _ = echoAudio.voicePolicy.consume("TARS")
+            echoAudio.echoPolicy.lastOutput = "Há também manchas visíveis na superfície da tela."
+            echoAudio.echoPolicy.endedAt = ProcessInfo.processInfo.systemUptime - 0.2
+            echoAudio.captureStartedAt = ProcessInfo.processInfo.systemUptime
+            echoAudio.transcript = "Há também manchas visíveis na superfície da tela"
+            echoAudio.finish()
+            try await waitFor { echoAudio.state == "LISTENING" }
+            try require(echoRequests == 0 && echoAudio.voicePolicy.awake,
+                        "Spoken echo reached general conversation or revoked attention")
             return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription

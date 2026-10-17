@@ -28,7 +28,7 @@ struct MyApp: App {
         let remote = RemoteTARSRuntime(client: TARSClient(baseURL: baseURL), pairingSecret: pairingSecret)
         let services: any TARSRuntime
         var observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)? = nil
-        var logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil
+        var evidenceRecall: (@MainActor (String, XRMemoryDocument) async throws -> MemoryRecallEvidence?)? = nil
         let nativeAvailable = (try? NativeAIKeychain.load()) != nil
         #if DEBUG
         print("[TARS_RUNTIME] KEYCHAIN_STATUS", NativeAIKeychain.diagnosticStatus())
@@ -38,14 +38,14 @@ struct MyApp: App {
         if nativeAvailable {
             services = NativeAIRuntime(body: remote, ai: NativeAIRuntime.service)
             let reasoner = XRMemoryReasoner { try await NativeAIRuntime.service.interpretMemory($0) }
-            logicalRecall = { try await reasoner.answer($0,document:$1) }
+            evidenceRecall = { try await reasoner.resolve($0,document:$1) }
             observeRecall = { reasoner.observe($0,answer:$1,document:$2) }
         } else {
             // Provisioning must succeed before replacing the validated voice/vision path.
             services = remote
         }
         let weather = NativeWeatherLookup()
-        return MemoryTARSRuntime(underlying: MigratingTARSRuntime(remaining: services, weather: weather), logicalRecall:logicalRecall, observeRecall:observeRecall, prepareConversation:{ weather.observeInput($0) })
+        return MemoryTARSRuntime(underlying: MigratingTARSRuntime(remaining: services, weather: weather), evidenceRecall:evidenceRecall, observeRecall:observeRecall, prepareConversation:{ weather.observeInput($0) })
     }
 
     var body: some Scene {

@@ -35,6 +35,9 @@ import Foundation
         recent.removeAll { Date().timeIntervalSince($0.time)>120 }
     }
     func answer(_ text:String, document:XRMemoryDocument) async throws -> String? {
+        try await resolve(text, document: document)?.answer
+    }
+    func resolve(_ text: String, document: XRMemoryDocument) async throws -> MemoryRecallEvidence? {
         guard !document.facts.isEmpty, text.count <= 2000 else { return nil }
         synchronize(document)
         let facts = document.facts.map { ["id":$0.key,"statement":$0.statement] }
@@ -53,7 +56,9 @@ import Foundation
         }
         try Task.checkCancellation()
         guard plan.intent != "unrelated" else { recent=[]; return nil }
-        guard plan.intent == "query" else { return "A qual pessoa, objeto ou relação você está se referindo?" }
+        guard plan.intent == "query" else {
+            return MemoryRecallEvidence(answer: "A qual pessoa, objeto ou relação você está se referindo?", sourceKeys: [], ownerID: document.ownerID, revision: document.revision)
+        }
         let known = Dictionary(uniqueKeysWithValues:document.facts.map { ($0.key,$0.statement) })
         guard plan.facts.count <= 256, plan.facts.allSatisfy({ fact in
             guard let statement=known[fact.source] else { return false }
@@ -69,6 +74,6 @@ import Foundation
         let result = try XRLogic.evaluate(query,facts:plan.facts)
         let answer = XRLogic.render(result,mode:plan.query.mode)
         observe(text,answer:answer,document:document)
-        return answer
+        return MemoryRecallEvidence(answer: answer, sourceKeys: Array(Set(result.rows.flatMap(\.sources))).sorted(), ownerID: document.ownerID, revision: document.revision)
     }
 }

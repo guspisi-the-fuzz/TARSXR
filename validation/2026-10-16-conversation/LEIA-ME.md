@@ -31,3 +31,9 @@ O build Debug para Simulator rejeitou `ConversationContext.append` por acesso so
 ## Segunda tentativa no Mac
 
 O usuário forneceu o log completo: Debug antes/depois dos testes e Release para iOS passaram; passaram também os testes nativos/HTTP e os 56 checks novos. O ciclo simulado então parou em “Wake must acknowledge and await question”. A inspeção confirmou que a saudação é assíncrona, mas o teste lia o estado imediatamente, e que a fixture não separava o callback de saudação das perguntas gerais. O teste agora aguarda SPEAKING e fornece wakeRespond próprio. O despertar real agora marca THINKING, mantém a tarefa de saudação cancelável e não envia uma saudação implícita para o callback de perguntas comuns. A opção --cycle-only permite recompilar Debug e repetir somente o ciclo; não representa nova aprovação de Release.
+
+## Terceira tentativa no Mac — ciclo aprovado
+
+Em 16/10/2026, o usuário executou `TARSXR_ETAPA1_CORRIGIR_WAKE.command` e forneceu o resultado PASS para Debug + ciclo simulado do app, no iPhone 18 Pro Simulator. O ciclo incluiu permissões e normalização de câmera simulada, cancelamento, histórico visual PT/EN, áudio silencioso com delegates, despertar, follow-ups, callbacks atrasados, bloqueio de falha permanente e recuperação. A produção testada corresponde ao commit de código `4f3e526`.
+
+A suíte completa e os builds Debug/Release haviam passado na segunda tentativa. Na terceira foi repetido somente Debug + ciclo, conforme indicado explicitamente pelo script. Portanto **não há evidência de novo build Release após a correção do despertar**. Nenhum desses resultados comprova reconhecimento acústico, eco, JBL, latência de rede ou bateria/temperatura no XR físico. A etapa 1 segue pendente de aceitação física e publicação no repositório do usuário.

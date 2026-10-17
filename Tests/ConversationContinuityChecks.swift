@@ -182,6 +182,117 @@ import Foundation
             legacyParts += 1; check(part == text, "legacy full audio preserves text"); return Data([1])
         }, play: { _ in })
         check(legacyParts == 1, "legacy audio switch retains one complete synthesis")
+        check(ConversationMemoryQuestion.validName("João Nascimento", relation: "meu pai"), "ordinary surname is not mistaken for a date attribute")
+        check(!ConversationMemoryQuestion.validName("aniversário do meu pai", relation: "meu pai"), "a relation attribute label is not a person name")
+        var wake = VoiceActivationPolicy()
+        check(wake.consume("TARS, wake up") == .acknowledge && wake.awaitingRequest, "name plus wake phrase is a greeting, never a general question")
+        check(wake.consume("Wake up, TARS") == .continueListening, "wake phrase plus name is also a greeting")
+        check(wake.consume("TARS wake up") == .continueListening, "repeated combined wake does not call general conversation")
+        check(ConversationMemoryQuestion.clean("Não, TARS. Eu quero saber quem é a Luma") == "quem é a Luma", "repair address and question wrapper")
+        check(ConversationMemoryQuestion.clean("Não quero saber quem é a Luma").hasPrefix("Não"), "negative intent is preserved")
+        check(!ConversationMemoryQuestion.maySuggest("Você é um filho da puta. Luma é uma gata"), "incidental abusive transcript is not offered as a fact")
+        let readStore = XRPersistentMemory(url: root.appendingPathComponent("read-fixtures.json"))
+        _ = try readStore.save(subject: "Luma", statement: "Luma é uma gata que mora comigo e com Nora", correction: false)
+        _ = try readStore.save(subject: "Nora", statement: "Nora mora comigo e com Luma", correction: false)
+        _ = try readStore.save(subject: "meu irmão", statement: "Caio é meu irmão", correction: false)
+        let readBase = ConversationFixture(); var unnecessaryPlans = 0
+        let readPending = XRMemoryPendingState()
+        let readRuntime = MemoryTARSRuntime(underlying: readBase, memory: { readStore }, uptime: { now }, pendingState: readPending, logicalRecall: { _, _ in
+            unnecessaryPlans += 1; return "Pelos fatos registrados: gata."
+        })
+        let readBefore = try readStore.load()
+        let identity = try await readRuntime.converse(text: "Não, TARS. Eu quero saber quem é a Luma", language: "pt-BR", context: nil)
+        check(identity.contains("Nora") && identity.contains("gata") && unnecessaryPlans == 0, "full saved identity precedes lossy model interpretation")
+        let residence = try await readRuntime.converse(text: "Com quem que ela mora?", language: "pt-BR", context: nil)
+        check(residence.contains("Nora") && unnecessaryPlans == 0 && readBase.contexts.isEmpty, "residence follow-up uses only saved evidence without paid interpretation")
+        readPending.suggestion = ([("Nova", "Nova é uma gata")], now + 60)
+        let brothers = try await readRuntime.converse(text: "Não. Eu quero saber qual o nome dos meus irmãos", language: "pt-BR", context: nil)
+        check(readPending.suggestion == nil, "decline plus question never leaves an accidental save pending")
+        check(brothers.contains("Caio") && unnecessaryPlans == 0, "repaired sibling question stays deterministic")
+        // Model-backed reads must preserve provenance and one named referent,
+        // even when several saved facts support the answer.
+        let evidenceBase = ConversationFixture()
+        let evidenceRuntime = MemoryTARSRuntime(underlying: evidenceBase, memory: { readStore }, uptime: { now }, pendingState: XRMemoryPendingState(), evidenceRecall: { _, document in
+            MemoryRecallEvidence(answer: "Resultado sintético baseado nos registros.", sourceKeys: document.facts.filter { ["luma", "nora"].contains($0.key) }.map(\.key), ownerID: document.ownerID, revision: document.revision)
+        })
+        let evidenceBefore = try Data(contentsOf: root.appendingPathComponent("read-fixtures.json"))
+        _ = try await evidenceRuntime.converse(text: "O que sabemos sobre Luma?", language: "pt-BR", context: nil)
+        let evidenceFollowUp = try await evidenceRuntime.converse(text: "Com quem que ela mora?", language: "pt-BR", context: nil)
+        check(evidenceFollowUp.contains("Nora") && evidenceBase.contexts.isEmpty, "multiple cited sources retain a single named subject")
+        let evidenceAfter = try Data(contentsOf: root.appendingPathComponent("read-fixtures.json"))
+        check(evidenceAfter == evidenceBefore, "evidence reads leave persistent bytes untouched")
+        now += 121
+        let expiredFocus = try await evidenceRuntime.converse(text: "Com quem ela mora?", language: "pt-BR", context: nil)
+        check(expiredFocus.contains("De quem"), "expired named subject requires clarification")
+        _ = try await evidenceRuntime.converse(text: "O que sabemos sobre Luma e Nora?", language: "pt-BR", context: nil)
+        let ambiguousFocus = try await evidenceRuntime.converse(text: "Com quem ela mora?", language: "pt-BR", context: nil)
+        check(ambiguousFocus.contains("De quem"), "two named subjects never select one pronoun arbitrarily")
+        _ = try await evidenceRuntime.converse(text: "O que sabemos sobre Luma?", language: "pt-BR", context: nil)
+        evidenceRuntime.recordLocalExchange(question: "Leia o email", answer: "Outra pessoa escreveu.", source: .mail, capturedAt: nil)
+        let toolFocus = try await evidenceRuntime.converse(text: "Com quem ela mora?", language: "pt-BR", context: nil)
+        check(toolFocus.contains("De quem"), "tool topic clears personal referent")
+        let invalidEvidence = MemoryTARSRuntime(underlying: ConversationFixture(), memory: { readStore }, uptime: { now }, pendingState: XRMemoryPendingState(), evidenceRecall: { _, document in
+            MemoryRecallEvidence(answer: "Resposta sem fonte válida", sourceKeys: ["invented-source"], ownerID: document.ownerID, revision: document.revision)
+        })
+        let rejectedEvidence = try await invalidEvidence.converse(text: "O que sabemos sobre Luma?", language: "pt-BR", context: nil)
+        check(!rejectedEvidence.contains("Resposta sem fonte"), "runtime rejects nonexistent evidence IDs")
+        for mismatch in ["owner", "revision"] {
+            let wrongIdentity = MemoryTARSRuntime(underlying: ConversationFixture(), memory: { readStore }, uptime: { now }, pendingState: XRMemoryPendingState(), evidenceRecall: { _, document in
+                MemoryRecallEvidence(answer: "Evidência de outra identidade", sourceKeys: ["luma"], ownerID: mismatch == "owner" ? "another-owner" : document.ownerID, revision: mismatch == "revision" ? "another-revision" : document.revision)
+            })
+            let rejectedIdentity = try await wrongIdentity.converse(text: "O que sabemos sobre Luma?", language: "pt-BR", context: nil)
+            check(!rejectedIdentity.contains("Evidência de outra"), "typed evidence rejects " + mismatch + " mismatch")
+        }
+        let rankedStore = XRPersistentMemory(url: root.appendingPathComponent("ranked-fixtures.json"))
+        for name in ["Aline", "Breno", "Caio", "Dora", "Estela"] {
+            _ = try rankedStore.save(subject: name, statement: name + " participa do grupo", correction: false)
+        }
+        let rankedDocument = try rankedStore.load()
+        let ranked = rankedStore.context(for: "O que sabemos sobre Estela?", document: rankedDocument, followUpKeys: rankedDocument.facts.map(\.key))
+        let selected = ranked["facts"] as? [[String: Any]] ?? []
+        check(selected.first?["subject"] as? String == "Estela" && selected.count == 4, "explicit subject outranks four old follow-up keys")
+        check(ranked["matched_fact_count"] as? Int == 5 && ranked["omitted_fact_count"] as? Int == 1, "bounded retrieval reports omitted evidence")
+        let revisionStore = XRPersistentMemory(url: root.appendingPathComponent("revision-fixtures.json"))
+        _ = try revisionStore.save(subject: "Iara", statement: "Iara mora comigo e com Raul", correction: false)
+        let revisionRuntime = MemoryTARSRuntime(underlying: ConversationFixture(), memory: { revisionStore }, uptime: { now }, pendingState: XRMemoryPendingState())
+        _ = try await revisionRuntime.converse(text: "Quem é Iara?", language: "pt-BR", context: nil)
+        _ = try revisionStore.forget(subject: "Iara")
+        let deletedReferent = try await revisionRuntime.converse(text: "Com quem ela mora?", language: "pt-BR", context: nil)
+        check(deletedReferent.contains("De quem") && !deletedReferent.contains("Raul"), "external deletion invalidates referent and its evidence")
+        let readAfter = try readStore.load()
+        check(readAfter.revision == readBefore.revision && readAfter.facts == readBefore.facts, "physical-transcript read sequence never changes persistent facts")
+        let choicesStore = XRPersistentMemory(url: root.appendingPathComponent("choice-fixtures.json"))
+        _ = try choicesStore.save(subject: "Nilo", statement: "Nilo é meu pai", correction: false)
+        _ = try choicesStore.save(subject: "Renato", statement: "Renato é meu pai", correction: false)
+        _ = try choicesStore.save(subject: "meu pai nascimento", statement: "Meu pai nasceu em 6 de setembro de 1940", correction: false)
+        let choicesBase = ConversationFixture(); let choicePending = XRMemoryPendingState()
+        let choicesRuntime = MemoryTARSRuntime(underlying: choicesBase, memory: { choicesStore }, uptime: { now }, pendingState: choicePending)
+        let choiceBefore = try choicesStore.load()
+        let options = try await choicesRuntime.converse(text: "E o nome do meu pai?", language: "pt-BR", context: nil)
+        check(options.contains("Nilo") && options.contains("Renato") && !options.contains("1940") && !options.contains("nascimento"), "only supported names become choices, not attribute labels")
+        let choice = try await choicesRuntime.converse(text: "B", language: "pt-BR", context: nil)
+        check(choice.contains("Renato") && choicesBase.contexts.isEmpty, "B resolves the active choice locally")
+        let choiceAfter = try choicesStore.load()
+        check(choiceAfter.revision == choiceBefore.revision, "choosing B is not an implicit memory correction")
+        _ = try await choicesRuntime.converse(text: "Qual o nome do meu pai?", language: "pt-BR", context: nil)
+        now += 121
+        let expired = try await choicesRuntime.converse(text: "B", language: "pt-BR", context: nil)
+        check(expired.contains("expirou"), "expired choice cannot become a fact or arbitrary model acknowledgement")
+        let nameStore = XRPersistentMemory(url: root.appendingPathComponent("name-label-fixtures.json"))
+        for (subject, statement) in [("Elias", "Elias é meu pai"),
+            ("aniversário do meu pai", "Meu pai nasceu em 6 de setembro de 1940"),
+            ("meu pai nascimento", "Meu pai nasceu em 6 de setembro de 1940"),
+            ("meu pai nascimento nascimento", "Meu pai nasceu em 6 de setembro de 1940")] {
+            _ = try nameStore.save(subject: subject, statement: statement, correction: false)
+        }
+        let nameRuntime = MemoryTARSRuntime(underlying: ConversationFixture(), memory: { nameStore }, pendingState: XRMemoryPendingState())
+        let nameAnswer = try await nameRuntime.converse(text: "E o nome do meu pai?", language: "pt-BR", context: nil)
+        check(nameAnswer.contains("Elias") && !nameAnswer.contains("possibilidade") && !nameAnswer.contains("nascimento"), "legacy date slots do not become alternative parent names")
+        var echo = VoiceEchoPolicy(); echo.lastOutput = "A imagem mostra uma tela. Há manchas visíveis na superfície da tela."; echo.endedAt = 100
+        check(echo.isEcho("Há manchas visíveis na superfície da tela", captureStarted: 100.2), "recent literal spoken tail is suppressed")
+        check(!echo.isEcho("TARS, há manchas visíveis na superfície da tela", captureStarted: 100.2), "explicitly addressed repetition is intentional input")
+        check(!echo.isEcho("Não", captureStarted: 100.2) && !echo.isEcho("Qual o nome dos meus irmãos?", captureStarted: 100.2), "short replies and new questions are never echo-filtered")
+        check(!echo.isEcho("Há manchas visíveis na superfície da tela", captureStarted: 105), "echo window expires")
         print("PASS: \(checks) conversation, provenance, retention, cancellation, routing and prepared-voice pipeline checks; simulated inputs only, no API/hardware")
     }
 }

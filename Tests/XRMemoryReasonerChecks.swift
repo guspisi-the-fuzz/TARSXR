@@ -66,6 +66,9 @@ import Foundation
         clarify.observe("Who is entity-a?",answer:"entity-a lives with entity-b",document:doc)
         let clarified=try await clarify.answer("Who lives there?",document:doc)
         precondition(ambiguousCalls==2 && clarified?.contains("entity-a")==true)
+        let evidence = try await reasoner.resolve("Who lives with entity-b?", document: doc)
+        precondition(evidence?.sourceKeys == ["f1"] && evidence?.ownerID == doc.ownerID && evidence?.revision == doc.revision)
+        precondition(evidence?.answer == first)
         precondition(doc.facts == [source])
         print("PASS: synthetic interpreter contract, cited sources, invented-entity rejection, context isolation/revision reset; no writes or API")
     }

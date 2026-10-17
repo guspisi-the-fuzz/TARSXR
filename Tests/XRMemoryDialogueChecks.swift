@@ -71,7 +71,7 @@ private final class DialogueFixtureRuntime: TARSRuntime {
       query:.init(mode:"select",clauses:[.init(relation:"lives",terms:["Luma","?x"],negative:false)],different:(payload.contains("além de mim") ? [] : [.init(left:"?x",right:"@user")]),select:"?x"))
   }
   let runtime=MemoryTARSRuntime(underlying:base,memory:{store},pendingState:XRMemoryPendingState(),
-    logicalRecall:{try await reasoner.answer($0,document:$1)},
+    evidenceRecall:{try await reasoner.resolve($0,document:$1)},
     observeRecall:{reasoner.observe($0,answer:$1,document:$2)})
   let nora=try await runtime.converse(text:"TARS, quem é a Nora?",language:"pt-BR",context:nil)
   precondition(nora.contains("Nora") && calls==0)

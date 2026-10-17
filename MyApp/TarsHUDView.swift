@@ -40,6 +40,16 @@ struct TarsHUDView: View {
                     AudioRoutePicker().frame(width: 36, height: 30)
                 }.padding(.horizontal, 12)
 
+                if audio.state == "THINKING" || audio.state == "PREPARING" || audio.state == "SPEAKING" || audio.state == "TRANSCRIBING" {
+                    HStack {
+                        Button { audio.interruptAndListen() } label: { Label("Ouvir", systemImage: "mic.fill") }
+                            .accessibilityLabel("Interromper e ouvir")
+                            .buttonStyle(.borderedProminent)
+                        Text(audio.interruptionAvailable ? "Pode dizer TARS escuta" : "Interrupção por voz indisponível · use Ouvir")
+                            .font(.caption2).lineLimit(2)
+                    }.padding(.horizontal, 12).fixedSize(horizontal: false, vertical: true)
+                }
+
                 if music.track != nil {
                     YouTubeMusicView(player: music).frame(height: 230)
                         .onAppear { music.visible = true }
@@ -68,12 +78,8 @@ struct TarsHUDView: View {
                     AudioControls(audio: audio)
                 } else {
                     VStack(spacing: 4) {
-                        Text(audio.message)
+                        Text(audio.message).lineLimit(4)
                         Text(audio.voiceSource).font(.caption2)
-                        if audio.state != "IDLE" && audio.state != "LISTENING" {
-                            if audio.interruptionAvailable { Text("Para interromper: TARS escuta").font(.caption2) }
-                            Button("Interromper e ouvir") { audio.interruptAndListen() }
-                        }
                         if !audio.lastHeard.isEmpty {
                             Text("Ouvi: \(audio.lastHeard)").foregroundStyle(.cyan).lineLimit(3)
                         }

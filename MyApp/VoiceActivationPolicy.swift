@@ -58,8 +58,11 @@ struct VoiceActivationPolicy {
         // words before an embedded name. Preserve the full question otherwise.
         let leadingWakePattern =
             #"(?i)^\s*(?:(?:ei|oi|olá|ola|hey|hi|hello|ok|okay)[\s,.:;!?—-]+)?(?:\b"# + wakeName + #"\b|\bwake\s+up\b)[\s,.:;!?—-]*"#
-        let leadingWake = text.range(of: leadingWakePattern, options: .regularExpression)
-        let request = leadingWake.map { String(text[$0.upperBound...]) } ?? text
+        var request = text
+        for _ in 0..<4 {
+            guard let leadingWake = request.range(of: leadingWakePattern, options: .regularExpression) else { break }
+            request = String(request[leadingWake.upperBound...])
+        }
         let cleaned = request.trimmingCharacters(in: .whitespacesAndNewlines)
 
         failures = 0

@@ -1,0 +1,48 @@
+Bloco 1 — execução portátil em Linux, Swift 6.0.3 / modo Swift 5
+
+PASS: actual camera parser preserves photo/selfie/Mel routing, explicit text detail, historical and nonvisual boundaries; no camera/API
+PASS: 89 conversation, provenance, retention, cancellation, routing and prepared-voice pipeline checks; simulated inputs only, no API/hardware
+PASS: deterministic dark, bright, sharp, blurred, flat, gradient and invalid frames; no AI or device
+PASS: video frame admission, duplicate requests/frames, invalid timestamps, cancellation and close; simulated frames only
+PASS: simulated frames, cadence, duplicate/in-flight rejection, age, change threshold, API cooldown and budget
+PASS: visual-description availability and shared admission; off, thermal, permissions, quality, stale frames, overlap, cooldown, unchanged scene and budget; no camera, network or speech
+PASS: shared speech cleanup, negation preservation and service routing
+PASS: 307 generic logic checks; renamed entities, exclusion, count, joins, negative evidence, contradictions, provenance and invalid plans
+PASS: synthetic interpreter contract, cited sources, invented-entity rejection, context isolation/revision reset; no writes or API
+PASS: local identity -> model follow-up, exclusions, no memory writes; online=false, calls=2
+PASS: mail intents, negations, message selection and plain-text MIME decoding
+PASS: progressive retry, capped rate, authorization pause, reset and recovery
+PASS: music commands, natural YouTube exits, negation, paused conversation and real HTML parser
+22 pronunciation checks PASS
+PASS: 167 voice checks, plus 1000 follow-ups and budget/capture boundary loops
+PASS: 1022 clock checks, including 1000 refreshes; no network or hardware
+PASS: new-process memory phase save
+PASS: new-process memory phase read
+PASS: new-process memory phase correct
+PASS: new-process memory phase read-corrected
+PASS: new-process memory phase delete
+PASS: new-process memory phase read-deleted
+PASS: 218 persistent memory/runtime checks; synthetic facts, no network or hardware
+PASS: 48 memory trace checks; no network or device
+PASS: 228 memory speech-intent checks; explicit commands, real temporary files, no ASR or device
+PASS: independent relation-memory process save
+PASS: independent relation-memory process read
+PASS: independent relation-memory process correct
+PASS: independent relation-memory process read-corrected
+PASS: independent relation-memory process delete
+PASS: independent relation-memory process read-deleted
+PASS: 384 relation-memory checks; explicit save, alias lookup, new processes; no network, microphone or device
+PASS: 32 remote runtime checks (injected transport; no network or hardware)
+PASS: portable Swift checks only. NOT RUN: concrete HTTP checks and iOS builds (requires macOS/Xcode).
+
+Teste adicional do diálogo com o mesmo contrato estruturado usado no runtime nativo:
+Q: Se a Luma é uma gata que mora comigo, com quem mais ela mora?
+A: Pelos fatos registrados: Nora.
+Q: E além de mim, com quem ela mora?
+A: Pelos fatos registrados: Nora.
+PASS: local identity -> model follow-up, exclusions, no memory writes; online=false, calls=2
+
+Análise sintática de MyApp/*.swift e Tests/*.swift: PASS.
+Git diff --check: PASS.
+Builds iOS, providers Apple/URLProtocol e ciclo Simulator: não executados neste ambiente; executar instalador no Mac.
+Sem API real, microfone, TTS real ou hardware. Aceitação física pendente.

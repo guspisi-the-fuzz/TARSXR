@@ -379,12 +379,25 @@ final class XRPersistentMemory {
 
     func context(for text: String, document: XRMemoryDocument, followUpKeys: [String] = []) -> [String: Any] {
         let query = " " + Self.key(text) + " "
-        let selected = document.facts.filter { fact in
+        let relevant = document.facts.filter { fact in
             let aliases = XRMemoryIntent.referenceKeys(subject: fact.subject, statement: fact.statement)
                 .subtracting(document.forgotten)
             return aliases.contains { query.contains(" " + $0 + " ") } || followUpKeys.contains(fact.key)
-        }.prefix(4)
+        }
+        // Explicit subjects outrank old follow-up keys and broad aliases. Keep
+        // the payload bounded, while making truncation visible to its consumer.
+        let ordered = relevant.enumerated().sorted { left, right in
+            func rank(_ fact: XRMemoryFact) -> Int {
+                if query.contains(" " + Self.key(fact.subject) + " ") { return 0 }
+                if followUpKeys.contains(fact.key) { return 1 }
+                return 2
+            }
+            let a = rank(left.element), b = rank(right.element)
+            return a == b ? left.offset < right.offset : a < b
+        }.map(\.element)
+        let selected = ordered.prefix(4)
         return ["schema_version": 1, "source": "xr_explicit_memory", "owner_id": document.ownerID,
+                "matched_fact_count": relevant.count, "omitted_fact_count": max(0, relevant.count - selected.count),
                 "revision": document.revision, "facts": selected.map { fact in
             ["key": fact.key, "subject": fact.subject, "statement": fact.statement,
              "source": fact.source, "scope": fact.scope, "updated_at": fact.updatedAt] as [String: Any]

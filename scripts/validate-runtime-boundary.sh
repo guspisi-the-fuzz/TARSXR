@@ -22,7 +22,12 @@ run_check() {
     cat "$OUT/$name.build.log"; return 1
   fi
   "$OUT/$name" > "$OUT/$name.test.log" 2>&1 || { cat "$OUT/$name.test.log"; return 1; }
-  cat "$OUT/$name.test.log"
+  python3 - "$OUT/$name.test.log" <<'PYRESULT'
+from pathlib import Path
+import sys
+for line in Path(sys.argv[1]).read_text(errors='replace').splitlines():
+    if not line.startswith('[TARS_MEMORY]'): print(line)
+PYRESULT
 }
 build_ios() {
   local config="$1" platform="$2" label="$3"

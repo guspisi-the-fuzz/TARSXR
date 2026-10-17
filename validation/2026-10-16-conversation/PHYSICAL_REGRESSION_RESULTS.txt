@@ -1,0 +1,60 @@
+Compilando e testando: conversation-camera-parser
+PASS: actual camera parser preserves photo/selfie/Mel routing, explicit text detail, historical and nonvisual boundaries; no camera/API
+Compilando e testando: conversation-continuity
+PASS: 76 conversation, provenance, retention, cancellation, routing and prepared-voice pipeline checks; simulated inputs only, no API/hardware
+Compilando e testando: frame-quality
+PASS: deterministic dark, bright, sharp, blurred, flat, gradient and invalid frames; no AI or device
+Compilando e testando: video-frame-gate
+PASS: video frame admission, duplicate requests/frames, invalid timestamps, cancellation and close; simulated frames only
+Compilando e testando: sequential-vision
+PASS: simulated frames, cadence, duplicate/in-flight rejection, age, change threshold, API cooldown and budget
+Compilando e testando: vision-description
+PASS: visual-description availability and shared admission; off, thermal, permissions, quality, stale frames, overlap, cooldown, unchanged scene and budget; no camera, network or speech
+Compilando e testando: spoken-request
+PASS: shared speech cleanup, negation preservation and service routing
+Compilando e testando: logic
+PASS: 307 generic logic checks; renamed entities, exclusion, count, joins, negative evidence, contradictions, provenance and invalid plans
+Compilando e testando: memory-reasoner
+PASS: synthetic interpreter contract, cited sources, invented-entity rejection, context isolation/revision reset; no writes or API
+Compilando e testando: memory-dialogue
+PASS: local identity -> model follow-up, exclusions, no memory writes; online=false, calls=2
+Compilando e testando: mail-command
+PASS: mail intents, negations, message selection and plain-text MIME decoding
+Compilando e testando: reconnection
+PASS: progressive retry, capped rate, authorization pause, reset and recovery
+Compilando e testando: youtube-music
+PASS: music commands, natural YouTube exits, negation, paused conversation and real HTML parser
+Compilando e testando: pronunciation
+22 pronunciation checks PASS
+Compilando e testando: voice
+PASS: 167 voice checks, plus 1000 follow-ups and budget/capture boundary loops
+Compilando e testando: device-clock
+PASS: 1022 clock checks, including 1000 refreshes; no network or hardware
+Compilando e testando: persistent-memory
+PASS: new-process memory phase save
+PASS: new-process memory phase read
+PASS: new-process memory phase correct
+PASS: new-process memory phase read-corrected
+PASS: new-process memory phase delete
+PASS: new-process memory phase read-deleted
+PASS: 218 persistent memory/runtime checks; synthetic facts, no network or hardware
+Compilando e testando: memory-trace
+PASS: 48 memory trace checks; no network or device
+Compilando e testando: memory-speech-intent
+PASS: 228 memory speech-intent checks; explicit commands, real temporary files, no ASR or device
+Compilando e testando: memory-relations
+PASS: independent relation-memory process save
+PASS: independent relation-memory process read
+PASS: independent relation-memory process correct
+PASS: independent relation-memory process read-corrected
+PASS: independent relation-memory process delete
+PASS: independent relation-memory process read-deleted
+PASS: 384 relation-memory checks; explicit save, alias lookup, new processes; no network, microphone or device
+Compilando e testando: remote-runtime
+PASS: 32 remote runtime checks (injected transport; no network or hardware)
+Logs: /tmp/tars-xr-validation.xyC6yR
+
+Latest targeted run after narrowing name-label filtering (valid surname preserved):
+PASS: 78 conversation, provenance, retention, cancellation, routing and prepared-voice pipeline checks; simulated inputs only, no API/hardware
+
+Known environment anomaly: final Linux log contains a trailing fragment "*** Signal 4" despite runner exit 0 and PASS summaries. No assertion was removed or ignored; Mac/iOS SDK and simulator execution remain required.

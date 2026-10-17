@@ -104,3 +104,52 @@ enum VoiceInterruptionPolicy {
     static func matches(_ raw: String) -> Bool { command(in: raw) != nil }
     static func echoes(_ command: String, spoken: String) -> Bool { normalized(spoken).contains(command) }
 }
+
+/// Question-only repair: never rewrite explicit save/correction/delete instructions.
+enum ConversationMemoryQuestion {
+    static func clean(_ raw: String) -> String {
+        var text = SpokenRequest.clean(raw)
+        let address = SpokenRequest.wakeAliasPattern
+        text = text.replacingOccurrences(of: #"(?i)^n[aã]o[\s,.:;!?]+(?:"# + address + #"[\s,.:;!?]+)?(?=eu\s+quero\s+saber\b)"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)^(?:eu\s+)?(?:quero\s+saber|gostaria\s+de\s+saber)[\s,:]+(?=(?:quem|qual|quais|com\s+quem|onde|quando|como)\b)"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)^(?:e|logo|ent[aã]o)[\s,:]+(?=(?:quem|qual|quais|com\s+quem|o\s+nome)\b)"#, with: "", options: .regularExpression)
+        return text
+    }
+    static func validName(_ raw: String, relation: String) -> Bool {
+        let text = raw.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "pt_BR"))
+        guard !text.isEmpty, text != relation.folding(options: .diacriticInsensitive, locale: Locale(identifier: "pt_BR")) else { return false }
+        if text.range(of: #"^(?:(?:o|a) )?nome (da|do|de) |^(meu pai|minha mae)(?:\s|$)"#, options: .regularExpression) != nil { return false }
+        let relationLabel = text.range(of: #"\b(meu pai|minha mae)\b"#, options: .regularExpression) != nil
+        if relationLabel && text.range(of: #"\b(nascimento|aniversario|faleceu|falecimento|nasceu|sepultamento|data)\b"#, options: .regularExpression) != nil { return false }
+        return text.range(of: #"\d"#, options: .regularExpression) == nil
+    }
+    static func maySuggest(_ raw: String) -> Bool {
+        raw.range(of: #"(?i)\b(filh[oa]\s+da\s+puta|caralho|porra)\b"#, options: .regularExpression) == nil
+    }
+}
+
+/// Suppress a recently captured literal tail of TARS's own output; never consume
+/// an explicitly addressed request, a short answer or an arbitrary new sentence.
+struct VoiceEchoPolicy {
+    var lastOutput = ""
+    var endedAt: Double?
+    func isEcho(_ raw: String, captureStarted: Double) -> Bool {
+        guard let endedAt, captureStarted.isFinite, endedAt.isFinite,
+              captureStarted >= endedAt, captureStarted - endedAt <= 4 else { return false }
+        if raw.range(of: #"(?i)^\s*"# + SpokenRequest.wakeAliasPattern + #"\b"#, options: .regularExpression) != nil { return false }
+        func key(_ value: String) -> String {
+            value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "pt_BR"))
+                .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let text = key(raw)
+        return text.count >= 25 && text.split(separator: " ").count >= 4 && (" " + key(lastOutput) + " ").contains(" " + text + " ")
+    }
+}
+
+/// Read-only evidence returned by a local interpreter. Text is never persisted.
+struct MemoryRecallEvidence {
+    let answer: String
+    let sourceKeys: [String]
+    let ownerID: String
+    let revision: String
+}

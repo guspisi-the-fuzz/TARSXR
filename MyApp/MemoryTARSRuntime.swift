@@ -6,11 +6,12 @@ import Foundation
 final class XRMemoryPendingState {
     static let shared = XRMemoryPendingState()
     var fact: (correction: Bool, deadline: Double)?
+    var selection: (owner: String, revision: String, subject: String, values: [(name: String, key: String)], deadline: Double)?
     var suggestion: (facts: [(subject: String, statement: String)], deadline: Double)?
 
     func clear() {
         fact = nil
-        suggestion = nil
+        suggestion = nil; selection = nil
     }
 }
 
@@ -36,6 +37,10 @@ final class MemoryTARSRuntime: TARSRuntime {
     private let prepareConversation: (@MainActor (String) -> Void)?
     private let observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)?
     private let logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)?
+    private let evidenceRecall: (@MainActor (String, XRMemoryDocument) async throws -> MemoryRecallEvidence?)?
+    private var recallIdentity: String?
+    private var focusedSubjectKey: String?
+    private var focusTime = 0.0
     private let underlying: any TARSRuntime
     private let memory: @MainActor () throws -> XRPersistentMemory
     private var store: XRPersistentMemory?
@@ -57,11 +62,13 @@ final class MemoryTARSRuntime: TARSRuntime {
          uptime: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
          pendingState: XRMemoryPendingState? = nil,
          logicalRecall: (@MainActor (String, XRMemoryDocument) async throws -> String?)? = nil,
+         evidenceRecall: (@MainActor (String, XRMemoryDocument) async throws -> MemoryRecallEvidence?)? = nil,
          observeRecall: (@MainActor (String, String, XRMemoryDocument) -> Void)? = nil,
          prepareConversation: (@MainActor (String) -> Void)? = nil) {
         self.prepareConversation = prepareConversation
         self.observeRecall = observeRecall
         self.logicalRecall = logicalRecall
+        self.evidenceRecall = evidenceRecall
         self.underlying = underlying; self.memory = memory; self.uptime = uptime
         self.pendingState = pendingState ?? .shared
         traceMemory("runtime_ready")
@@ -132,6 +139,7 @@ final class MemoryTARSRuntime: TARSRuntime {
     func recordLocalExchange(question: String, answer: String, source: ConversationContext.Source, capturedAt: Double?) {
         if let doc = try? storage().load() { dialogue.synchronize(owner: doc.ownerID, revision: doc.revision) }
         else { dialogue.clear() }
+        if source != .memory { focusedSubjectKey = nil }
         if source != .memory && source != .conversation { lastKeys = []; lastRecallAt = 0 }
         dialogue.append(question: question, answer: answer, source: source, now: uptime(), capturedAt: capturedAt)
     }
@@ -144,7 +152,20 @@ final class MemoryTARSRuntime: TARSRuntime {
         let before = try? storage().load()
         if let before { dialogue.synchronize(owner: before.ownerID, revision: before.revision) }
         else { dialogue.clear() }
-        let answer = try await converseImpl(text:text, language:language, context:context)
+        if let before {
+            let identity = before.ownerID + "/" + before.revision
+            if recallIdentity != identity { lastKeys = []; lastRecallAt = 0; focusedSubjectKey = nil }
+            recallIdentity = identity
+        } else { lastKeys = []; lastRecallAt = 0; focusedSubjectKey = nil; recallIdentity = nil }
+        let normalizedQuestion = ConversationMemoryQuestion.clean(text)
+        if normalizedQuestion != SpokenRequest.clean(text),
+           text.range(of: #"(?i)^\s*n[aã]o\b"#, options: .regularExpression) != nil {
+            // The user can decline a suggestion and ask a question in one breath.
+            // Keep that refusal even when the question-only wrapper is removed.
+            pendingState.suggestion = nil; pendingState.fact = nil
+            invalidateConversation()
+        }
+        let answer = try await converseImpl(text:normalizedQuestion, language:language, context:context)
         try Task.checkCancellation()
         if context?["internal_wake_summary"] as? Bool != true {
             var mutated = false
@@ -157,6 +178,8 @@ final class MemoryTARSRuntime: TARSRuntime {
                     observeRecall?(text,answer,after)
                 }
             }
+            if mutated || forwardedConversation { focusedSubjectKey = nil }
+            else if let document = try? storage().load() { updateRecallFocus(question: normalizedQuestion, document: document) }
             if !mutated { dialogue.append(question: text, answer: answer, source: forwardedConversation ? .conversation : .memory, now: uptime()) }
         }
         return answer
@@ -180,6 +203,21 @@ final class MemoryTARSRuntime: TARSRuntime {
         }
         // Internal wake summaries are not user instructions and cannot write memory.
         let internalWake = context?["internal_wake_summary"] as? Bool == true
+        if !internalWake, let selection = pendingState.selection {
+            let doc = try store.load()
+            let key = XRPersistentMemory.key(text)
+            let index = Array("abcdefghijklmnopqrstuvwxyz").firstIndex { String($0) == key }
+            pendingState.selection = nil
+            if let index, selection.owner == doc.ownerID, selection.revision == doc.revision,
+               uptime().isFinite, uptime() >= selection.deadline - 120, uptime() < selection.deadline,
+               selection.values.indices.contains(index) {
+                let value = selection.values[index]
+                lastKeys = [value.key]; lastRecallAt = uptime(); invalidateConversation()
+                return "Para esta consulta, " + (selection.subject == "meu pai" ? "seu pai" : "sua mãe") + " se chama " + value.name + ". A escolha não alterou os registros salvos."
+            }
+            if index != nil { return "A lista de opções expirou ou mudou. Faça a pergunta novamente para eu conferir os registros atuais." }
+        }
+        if !internalWake, let residence = try localResidenceFollowUp(text: text, store: store) { return residence }
         if !internalWake,
            !SpokenRequest.isServiceQuery(text),
            localRelationNameRecallSubject(text: text) != nil {
@@ -199,7 +237,17 @@ final class MemoryTARSRuntime: TARSRuntime {
             }
         }
 
-        if !internalWake, !SpokenRequest.isServiceQuery(text), pendingState.fact == nil, pendingState.suggestion == nil, let logicalRecall {
+        if !internalWake, XRMemoryIntent.isQuestionLike(text) {
+            switch XRMemoryIntent.parse(text) {
+            case .ordinary, .recall, .recallAttribute:
+                if let local = try localConcreteMemoryAnswer(text: text, store: store, english: english) {
+                    traceMemory("concrete_inference_local"); return local
+                }
+            default: break
+            }
+        }
+
+        if !internalWake, !SpokenRequest.isServiceQuery(text), pendingState.fact == nil, pendingState.suggestion == nil, (evidenceRecall != nil || logicalRecall != nil) {
             let eligible: Bool
             switch XRMemoryIntent.parse(text) {
             // Explicit memory reads are deterministic and must be answered by the
@@ -216,11 +264,23 @@ final class MemoryTARSRuntime: TARSRuntime {
             if eligible {
                 do {
                     let before = try store.load()
-                    if let answer = try await logicalRecall(text,before) {
+                    let requestRevision = conversationRevision
+                    let evidence: MemoryRecallEvidence?
+                    if let evidenceRecall { evidence = try await evidenceRecall(text, before) }
+                    else if let answer = try await logicalRecall?(text, before) {
+                        evidence = MemoryRecallEvidence(answer: answer, sourceKeys: [], ownerID: before.ownerID, revision: before.revision)
+                    } else { evidence = nil }
+                    if let evidence {
                         try Task.checkCancellation()
-                        guard try store.load().revision == before.revision else { throw XRMemoryError.changed }
+                        let current = try store.load()
+                        guard current.ownerID == before.ownerID, current.revision == before.revision,
+                              conversationRevision == requestRevision,
+                              evidence.ownerID == before.ownerID, evidence.revision == before.revision,
+                              evidence.sourceKeys.allSatisfy({ key in before.facts.contains { $0.key == key } }) else { throw XRMemoryError.changed }
+                        if evidenceRecall != nil { lastKeys = evidence.sourceKeys }
+                        lastRecallAt = uptime()
                         invalidateConversation()
-                        return answer
+                        return evidence.answer
                     }
                 } catch is CancellationError { throw CancellationError() }
                 catch {
@@ -530,7 +590,7 @@ final class MemoryTARSRuntime: TARSRuntime {
                     return "\(entity) foi sepultado em \(value)."
                 }
             case .ordinary:
-                if !internalWake {
+                if !internalWake && ConversationMemoryQuestion.maySuggest(text) {
                     var suggested: [(subject: String, statement: String)] = []
                     if let residence = localResidenceCandidate(text: text), !residence.explicit {
                         suggested = residence.facts
@@ -656,11 +716,49 @@ final class MemoryTARSRuntime: TARSRuntime {
         return false
     }
 
+    /// A named subject is distinct from the facts cited to answer a question.
+    /// Several facts about one entity must not make its pronoun ambiguous.
+    private func updateRecallFocus(question: String, document: XRMemoryDocument) {
+        guard XRMemoryIntent.isQuestionLike(question), !SpokenRequest.isServiceQuery(question) else {
+            focusedSubjectKey = nil; return
+        }
+        let query = " " + XRPersistentMemory.key(question) + " "
+        let named = document.facts.filter {
+            XRMemoryIntent.splitAttributeSubject($0.subject) == nil &&
+            query.contains(" " + XRPersistentMemory.key($0.subject) + " ")
+        }
+        if named.count == 1 { focusedSubjectKey = named[0].key; focusTime = uptime() }
+        else if named.count > 1 { focusedSubjectKey = nil }
+        else if !ConversationPolicy.usesReference(question) { focusedSubjectKey = nil }
+    }
+
+    private func localResidenceFollowUp(text: String, store: XRPersistentMemory) throws -> String? {
+        let query = XRPersistentMemory.key(text)
+        guard query.range(of: #"^(?:e )?com quem(?: que)? (ela|ele) (mora|vive)$"#, options: .regularExpression) != nil else { return nil }
+        let now = uptime()
+        guard now.isFinite, now >= lastRecallAt, now - lastRecallAt <= 120, let focusedSubjectKey, now >= focusTime, now - focusTime <= 120, dialogue.turns.last?.source == .memory else {
+            return "De quem você quer saber com quem mora?"
+        }
+        let doc = try store.load()
+        guard let subject = doc.facts.first(where: { $0.key == focusedSubjectKey }),
+              XRMemoryIntent.splitAttributeSubject(subject.subject) == nil else { return "De quem você está falando?" }
+        let entity = XRPersistentMemory.key(subject.subject)
+        let evidence = doc.facts.filter { fact in
+            let statement = " " + XRPersistentMemory.key(fact.statement) + " "
+            return (fact.key == subject.key || statement.contains(" " + entity + " ")) &&
+                statement.range(of: #"\b(mora|moram|vive|vivem)\b"#, options: .regularExpression) != nil
+        }
+        guard !evidence.isEmpty else { return "Não encontrei nos registros atuais com quem essa pessoa ou animal mora." }
+        invalidateConversation()
+        return "Pelo que está salvo neste XR: " + evidence.map { XRMemoryIntent.naturalizedStatement($0.statement) }.joined(separator: " ")
+    }
+
     private func localRelationNameRecallSubject(text raw: String) -> String? {
         let key = XRPersistentMemory.key(raw)
 
         switch key {
-        case "qual o nome da minha mae",
+        case "o nome da minha mae", "nome da minha mae", "quem e minha mae",
+             "qual o nome da minha mae",
              "qual e o nome da minha mae",
              "qual o nome de minha mae",
              "qual e o nome de minha mae",
@@ -679,7 +777,8 @@ final class MemoryTARSRuntime: TARSRuntime {
              "por favor qual o nome da minha mae":
             return "minha mãe"
 
-        case "qual o nome do meu pai",
+        case "o nome do meu pai", "nome do meu pai", "quem e meu pai",
+             "qual o nome do meu pai",
              "qual e o nome do meu pai",
              "qual o nome de meu pai",
              "qual e o nome de meu pai",
@@ -707,7 +806,11 @@ final class MemoryTARSRuntime: TARSRuntime {
         guard let subject = localRelationNameRecallSubject(text: raw) else { return nil }
 
         let document = try store.load()
-        let matches = localExactRelationNameFacts(subject: subject, document: document)
+        var names = Set<String>()
+        let matches = localExactRelationNameFacts(subject: subject, document: document).filter {
+            let value = localRelationNameValue(fact: $0, subject: subject)
+            return ConversationMemoryQuestion.validName(value, relation: subject) && names.insert(XRPersistentMemory.key(value)).inserted
+        }
         traceMemory("recall_lookup", fields: [
             "fact_count": document.facts.count,
             "found": !matches.isEmpty,
@@ -733,6 +836,8 @@ final class MemoryTARSRuntime: TARSRuntime {
             lastKeys = matches.map { $0.key }
             lastRecallAt = uptime()
 
+            pendingState.selection = (document.ownerID, document.revision, subject,
+                matches.map { (localRelationNameValue(fact: $0, subject: subject), $0.key) }, uptime() + 120)
             let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
             let options = matches.enumerated().map { index, fact in
                 let label = index < letters.count ? String(letters[index]) : "\(index + 1)"
@@ -1580,7 +1685,7 @@ private enum XRMemoryProfileResolverV1 {
             let value = cleanName(raw)
             let valueKey = XRPersistentMemory.key(value)
             guard !valueKey.isEmpty else { return nil }
-            guard valueKey != targetKey else { return nil }
+            guard valueKey != targetKey, ConversationMemoryQuestion.validName(value, relation: target) else { return nil }
             guard valueKey != "nome da minha mae" && valueKey != "nome do meu pai" else { return nil }
             return value
         }
