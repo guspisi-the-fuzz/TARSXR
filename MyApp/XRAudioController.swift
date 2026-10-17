@@ -1094,6 +1094,7 @@ extension XRAudioController {
         }
         defer { audio.suspendHandsFree() }
         do {
+            _ = try SpatialBenchRuntime.runSimulatedChecks()
             let musicChecks = await YouTubeMusicPlayer.runExitChecks()
             try require(musicChecks.hasPrefix("PASS:"), musicChecks)
             // Silent PCM uses the real AVAudioEngine completion path, no API/microphone.
@@ -1437,7 +1438,7 @@ extension XRAudioController {
             try await waitFor { echoAudio.state == "LISTENING" }
             try require(echoRequests == 0 && echoAudio.voicePolicy.awake,
                         "Spoken echo reached general conversation or revoked attention")
-            return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause; local execution cancellation hook and actual music receipts/cancellation and media-handoff ownership. Simulated I/O; no microphone, TTS output or API."
+            return "PASS: camera permissions/unavailable/disconnect, photo normalization, delegate completion; camera cancellation/replacement/single-use; image replacement, expiry during response, overlapping request rejection; visual dialogue routing PT/EN, bounded history/budget, cancelled context; early response drain, no question echo, permanent failure stop; PCM prebuffer, underrun recovery, final drain, cancellation; natural playback completion, cancelled audio, no silent voice substitution, recovery on new response; controller cycle PT/EN, ambient ignore, wake-only, return to wake, stale callback, cancelled answer, no replay, permanent failure pause; local execution cancellation hook and actual music receipts/cancellation and media-handoff ownership; spatial runtime map alignment, simulated route and camera lease. Simulated I/O; no microphone, TTS output or API."
         } catch {
             return "FAIL: " + error.localizedDescription
         }

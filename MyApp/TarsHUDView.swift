@@ -60,6 +60,7 @@ struct TarsHUDView: View {
                     Text(music.status).font(.caption).lineLimit(2)
                 }
                 SequentialVisionControls(vision: .shared, model: model, speak: { audio.speakCurrentVisionDescription($0) }, audioAvailable: audio.state == "IDLE" || audio.state == "LISTENING")
+                SpatialBenchControls()
                 CognitiveDisplay(state: audio.state, level: audio.level)
                     .frame(maxHeight: .infinity)
                 #if DEBUG
@@ -287,10 +288,10 @@ struct TarsHUDView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { SequentialVision.shared.stop("APP_INACTIVE") }
+            if phase != .active { SequentialVision.shared.stop("APP_INACTIVE"); SpatialBenchRuntime.shared.stop(reason:"App inativo.") }
             if manualDiagnostics && phase == .background { audio.cancel(message: "Áudio pausado fora do app.") }
         }
-        .onDisappear { audio.suspendHandsFree(preservingLocalRequest: model.activeLocalActionKind == .external); SequentialVision.shared.stop() }
+        .onDisappear { audio.suspendHandsFree(preservingLocalRequest: model.activeLocalActionKind == .external); SequentialVision.shared.stop(); SpatialBenchRuntime.shared.stop() }
     }
 }
 

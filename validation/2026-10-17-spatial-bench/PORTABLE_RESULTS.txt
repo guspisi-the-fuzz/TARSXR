@@ -1,0 +1,11 @@
+CHECKPOINT — 17/10/2026 UTC
+PASS: full portable runner /tmp/tars-spatial-final.log, including 180 spatial, 32 Body V0 import and 345 four-wheel kinematic checks, Python read-only inventory tests and all previous portable regressions.
+PASS: actual spatial runtime simulated lifecycle in Foundation scaffold with ARKit/UIKit stubs. This is not an iOS SDK build or ARKit precision test.
+PASS: source syntax parsing, Bash syntax, git diff whitespace.
+PASS: firmware host tests and integrated virtual setup/loop with ArduinoJson 6.21.6, ASan and UBSan. LeakSanitizer unavailable under this container's process isolation; detect_leaks=0 used, address/undefined checks and all assertions retained.
+PASS: encoder emission regression fails against original source and passes after architecture-sized source fix. Corrected host transcript includes FL/FR/RL/RR; original truncated event retained as negative fixture.
+PASS: fixed ESP32 firmware PlatformIO build, espressif32 7.1.3 / Arduino ESP32 2.0.17 / ArduinoJson 6.21.6. RAM 23016 bytes, flash 310537 bytes. firmware.bin generated locally, no flash.
+Initial PlatformIO attempts were blocked by automatic approval review due to collector/telemetry egress. Supported PLATFORMIO_SETTING_ENABLE_TELEMETRY=no was verified false and used for the final successful build. No collector egress was authorized or bypassed.
+NOT RUN HERE: macOS/Xcode Debug/Release, native HTTP checks, iPhone Simulator app cycle with new code, physical XR spatial accuracy/thermal, physical serial/PWM/actuation.
+No personal memory, keys or physical devices touched. GPIO, motors, servos, safety gates and NativeBodyCore unchanged. Firmware source fix limited to encoder emission and its tests/documentation.
+Previous intermediate runs: one compiler run interrupted by editing a source under compilation; another caught the real truncated encoder fixture and failed strict decoding. Final runner passed after separating the baseline negative fixture and fixing the firmware emitter. No failed assertions suppressed.

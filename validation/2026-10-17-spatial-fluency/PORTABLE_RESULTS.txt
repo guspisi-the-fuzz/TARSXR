@@ -1,0 +1,19 @@
+Ambiente: Linux Ubuntu 24.04, Swift 6.0.3, modo Swift 5.
+
+PASS: 1021 verificações — stream real limitado ao quadro mais recente, 10000 eventos, término/substituição, prazos de inicialização/relocalização/recuperação e relógio simulado.
+PASS: 1018 verificações — observação do corpo com relógio/fetch injetados: 1000 atualizações offline com menos de 30 consultas, cache curto, falhas, sobreposição, cancelamento, invalidação por comando, respostas lentas e cooldown a partir da conclusão.
+PASS: 180 verificações espaciais existentes — transformações, frescor, lugares, mapas, arquivos, percursos simulados e exclusão de câmera.
+PASS: 345 verificações cinemáticas de quatro rodas existentes — geometria sintética; sem atuação.
+PASS: 89 verificações de continuidade existentes, executadas isoladamente após interrupção do runner.
+PASS: parse de todos os arquivos MyApp/*.swift e Tests/*.swift; bash -n do runner.
+
+PASS com plataformas simuladas (não é build Apple):
+- SpatialBenchRuntime.runSimulatedChecks: fonte do runtime com APIs ARKit/UIKit/Combine substituídas em scaffold Linux, mantendo receive/mark/stop/watchdog reais. Testa alinhamento, confirmação de cadastro persistente, dados live, timeout e retenção histórica, percurso simulado e callbacks antigos.
+- NativeCoreChecks: NativeAIRuntime/NativeBodyCore/NativeBodyObservation reais; IA, Keychain e fetch real substituídos por stubs. Inclui 100 refreshes com relógio fixo, STOP durante backoff e descarte de CLEAR anterior ao ESTOP.
+- YouTubeMusicPlayer.runExitChecks: implementação real sem UIViewRepresentable e com APIs WebKit/áudio simuladas. Stub de WKWebView falha se criado. Fixtures de init/background/título vazio/stop/cancelamento passaram sem criar WebKit.
+
+Runner completo Linux: INCOMPLETO. Duas execuções interrompidas em conversation-continuity por Signal 4 na camada de runtime do ambiente (/proc/.../stat), sem falha de assert identificada. O binário de conversation-continuity passou isoladamente. Esse resultado não é PASS completo e nenhum teste foi desativado no runner entregue.
+
+NOT RUN aqui: build real com SDK Apple, renderização SwiftUI, ciclo completo no Simulator Apple, ARKit real, reprodução WebKit real, rede de corpo real, API paga, acústica, temperatura e fluidez no XR.
+Os passes de Mac anteriores pertencem ao pacote anterior; não validam este incremento.
+Nenhum flash, comando físico ou alteração da memória pessoal.

@@ -1,7 +1,9 @@
 import Foundation
 @MainActor final class FakeFirmware: TARSRuntime {
     var available=true, safe=true, virtual=true, commands=[String](), recovery=false
+    var hudCalls=0
     func hud() async throws -> HUDSnapshot {
+        hudCalls += 1
         if !available { throw TARSClientError.unavailable }
         return HUDSnapshot(schemaVersion:"1.0",timestamp:Date().timeIntervalSince1970,identity:[:],cognition:[:],system:["esp32":virtual ? "VIRTUAL":"CONNECTED","safety":safe ? "CLEAR":"STOP"],sensors:[:],resources:[:],motion:[:])
     }
@@ -35,11 +37,26 @@ import Foundation
         do { _=try await controller.command("MOVE",params:.init(direction:"forward",speed:0.1));preconditionFailure() } catch TARSClientError.rejected(let reason) { precondition(reason=="PHYSICAL_TRANSPORT_NOT_VALIDATED") }
         let offline=FakeFirmware();offline.available=false
         let ai=NativeAIService { ("test-only","gpt-5.4-mini") }
-        let runtime=NativeAIRuntime(body:offline,ai:ai)
+        let runtime=NativeAIRuntime(body:offline,ai:ai,observationClock:{0})
         let hud=try await runtime.hud()
         precondition(hud.system["core"]=="XR_NATIVE" && hud.system["esp32"]=="UNAVAILABLE" && hud.system["safety"]=="UNKNOWN")
         let explanation = try await runtime.converse(text:"Você consegue andar pra frente?", language:"pt", context:nil)
         precondition(explanation.contains("bloqueado") && offline.commands.isEmpty)
+        for _ in 0..<100 {
+            let repeated=try await runtime.hud()
+            precondition(repeated.system["core"]=="XR_NATIVE" && repeated.system["safety"]=="UNKNOWN")
+        }
+        precondition(offline.hudCalls==1, "offline HUD refreshes must respect backoff")
+        _=try await runtime.command("STOP",params:nil)
+        precondition(offline.commands==["STOP"], "STOP must bypass observation backoff")
+        let clearBridge=FakeFirmware()
+        let clearRuntime=NativeAIRuntime(body:clearBridge,ai:ai,observationClock:{0})
+        let beforeStop=try await clearRuntime.hud()
+        precondition(beforeStop.system["safety"]=="CLEAR")
+        _=try await clearRuntime.command("ESTOP",params:nil)
+        let afterStop=try await clearRuntime.hud()
+        precondition(afterStop.system["safety"] != "CLEAR", "cached pre-ESTOP CLEAR cannot reappear")
+        precondition(clearBridge.commands==["ESTOP"])
         let virtualRuntime = NativeAIRuntime(body:firmware,ai:ai)
         firmware.virtual=true
         let capabilities = try await virtualRuntime.converse(text:"Quais comandos do ESP32?",language:"pt",context:nil)
@@ -71,6 +88,6 @@ import Foundation
         precondition(source.contains("apenas a ESPN"))
         let music=await lookup.answer("Toca o jogo da vida")
         precondition(music==nil)
-        print("PASS: native Core latch/recovery, no physical movement, Core alive without Mac, native quote identity and sports date selection")
+        print("PASS: native Core offline HUD backoff, direct STOP during retry, pre-ESTOP cache invalidation, latch/recovery, no physical movement, Core alive without Mac, native quote identity and sports date selection")
     }
 }

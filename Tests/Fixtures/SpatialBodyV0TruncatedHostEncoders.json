@@ -1,0 +1,1 @@
+{"type":"encoders","protocol":"tars-alpha-serial-json","protocol_version":"body-v0","available":true,"mode":"single_channel_a_change_count","direction_available":false,"uptime_ms":0,"pins":{"fl_a":4,"fr_a":27,"rl_a":32,"rr_a":33},"counts":{"fl":0,"fr":0,"rl":0}}

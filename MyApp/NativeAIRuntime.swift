@@ -6,19 +6,32 @@ import Foundation
         let config = try NativeAIKeychain.load(); return (config.key,config.model)
     }
     private let body: NativeBodyCore
+    private let bodyObservation: NativeBodyObservation
     private let ai: NativeAIService
     private let lookup = NativePublicLookup()
-    init(body: any TARSRuntime, ai: NativeAIService) { self.body=NativeBodyCore(bridge:body); self.ai=ai }
+    init(body: any TARSRuntime, ai: NativeAIService, observationClock: @escaping @MainActor () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+        let core=NativeBodyCore(bridge:body)
+        self.body=core; self.ai=ai
+        self.bodyObservation=NativeBodyObservation(now:observationClock) { try await core.hud() }
+    }
     func hud() async throws -> HUDSnapshot {
-        let remote = try? await body.hud()
+        let remote = await bodyObservation.read()
         try Task.checkCancellation()
         var system = remote?.system ?? ["esp32":"UNAVAILABLE","safety":"UNKNOWN","autonomy":"BODY_DISCONNECTED","forward":"UNAVAILABLE","reverse":"UNAVAILABLE"]
+        system["body_connection"]=remote == nil ? "WAITING_RETRY":"CONNECTED"
+        system["body_retry_s"]=String(bodyObservation.retryInSeconds)
         system["core"]="XR_NATIVE"; system["supervisor"]="UNMONITORED"; system["audio"]="XR_NATIVE"; system["vision"]="REFERENCE"
         return HUDSnapshot(schemaVersion:"1.0", timestamp:Date().timeIntervalSince1970, identity:["name":"TARS","role":"AUTONOMOUS SYSTEM"], cognition:["voice_state":"IDLE","ai":(try? NativeAIKeychain.load()) == nil ? "UNCONFIGURED" : "CONFIGURED"], system:system, sensors:remote?.sensors ?? [:], resources:remote?.resources ?? [:], motion:remote?.motion ?? [:])
     }
-    func command(_ action:String, params:TARSCommandParameters?) async throws -> TARSCommandReply { try await body.command(action,params:params) }
+    func command(_ action:String, params:TARSCommandParameters?) async throws -> TARSCommandReply {
+        bodyObservation.invalidate(); defer { bodyObservation.invalidate() }
+        return try await body.command(action,params:params)
+    }
     func telemetry() async throws -> TARSTelemetry { try await body.telemetry() }
-    func recover() async throws { try await body.recover() }
+    func recover() async throws {
+        bodyObservation.invalidate(); defer { bodyObservation.invalidate() }
+        try await body.recover()
+    }
     func transcribe(data:Data) async throws -> String { try await ai.transcribe(data) }
     func synthesize(text:String) async throws -> Data { try await ai.synthesize(text) }
     func streamSpeech(text:String,receive:@escaping @MainActor (Data) throws -> Void) async throws { try await ai.streamSpeech(text,receive:receive) }

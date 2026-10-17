@@ -67,6 +67,11 @@ run_check conversation-camera-parser "$OUT/camera-parser.swift" Tests/Conversati
 run_check conversation-continuity MyApp/VoiceActivationPolicy.swift MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/ConversationContinuityChecks.swift
 run_check memory-conversation MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/MemoryConversationChecks.swift
 run_check local-action-execution Tests/LocalActionExecutionChecks.swift
+run_check spatial-bench MyApp/SpatialModel.swift MyApp/CameraOwnership.swift Tests/SpatialBenchChecks.swift
+run_check spatial-session-policy MyApp/SpatialModel.swift MyApp/SpatialSessionPolicy.swift Tests/SpatialSessionPolicyChecks.swift
+run_check spatial-firmware MyApp/SpatialModel.swift MyApp/SpatialFirmwareEvidence.swift Tests/SpatialFirmwareChecks.swift
+run_check spatial-four-wheel MyApp/SpatialFourWheelPlan.swift Tests/SpatialFourWheelChecks.swift
+python3 Tests/SpatialBodyAuditChecks.py
 run_check frame-quality MyApp/FrameQuality.swift Tests/FrameQualityChecks.swift
 run_check video-frame-gate MyApp/SequentialSessionCamera.swift Tests/VideoFrameGateChecks.swift
 run_check sequential-vision MyApp/SequentialVisionPolicy.swift Tests/SequentialVisionChecks.swift
@@ -78,7 +83,7 @@ if [[ "$(uname -s)" != Darwin ]]; then
   run_check memory-dialogue MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift Tests/XRMemoryDialogueChecks.swift
 fi
 if [[ "$(uname -s)" == Darwin ]]; then
-  run_check native-core MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/NativePublicLookup.swift MyApp/NativeAIKeychain.swift MyApp/XRLogic.swift MyApp/NativeAIService.swift MyApp/NativeAIRuntime.swift MyApp/NativeBodyCore.swift Tests/NativeCoreChecks.swift
+  run_check native-core MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/NativePublicLookup.swift MyApp/NativeAIKeychain.swift MyApp/XRLogic.swift MyApp/NativeAIService.swift MyApp/NativeAIRuntime.swift MyApp/NativeBodyCore.swift MyApp/NativeBodyObservation.swift Tests/NativeCoreChecks.swift
   run_check memory-dialogue MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift MyApp/XRLogic.swift MyApp/XRMemoryReasoner.swift MyApp/NativeAIService.swift Tests/XRMemoryDialogueChecks.swift
   run_check native-ai MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/XRLogic.swift MyApp/NativeAIService.swift Tests/NativeAIChecks.swift
   run_check native-weather MyApp/HUDModels.swift MyApp/TARSRuntime.swift MyApp/NativeWeatherLookup.swift MyApp/MigratingTARSRuntime.swift MyApp/XRPersistentMemory.swift MyApp/XRMemoryIntent.swift MyApp/MemoryTARSRuntime.swift Tests/NativeWeatherChecks.swift
@@ -89,6 +94,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
   run_check yahoo-mail MyApp/MailCommand.swift MyApp/YahooIMAP.swift MyApp/YahooMessage.swift Tests/YahooChecks.swift
 fi
 run_check reconnection MyApp/ReconnectionPolicy.swift Tests/ReconnectionPolicyChecks.swift
+run_check native-body-observation MyApp/HUDModels.swift MyApp/NativeBodyObservation.swift Tests/NativeBodyObservationChecks.swift
 run_check youtube-music MyApp/YouTubeMusic.swift Tests/YouTubeMusicChecks.swift
 run_check pronunciation MyApp/AudioTestPronunciation.swift Tests/AudioTestPronunciationChecks.swift
 run_check voice MyApp/VoiceActivationPolicy.swift Tests/VoiceActivationChecks.swift

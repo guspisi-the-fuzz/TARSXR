@@ -8,7 +8,12 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
     @Published private(set) var track: YouTubeTrack?
     @Published private(set) var status = ""
     @Published private(set) var isPlaying = false
-    private(set) var webView: WKWebView!
+    private var storedWebView: WKWebView?
+    var hasCreatedWebView: Bool { storedWebView != nil }
+    var webView: WKWebView {
+        if let storedWebView { return storedWebView }
+        let view=makeWebView(); storedWebView=view; return view
+    }
     var visible = false
     var onMediaSessionConfirmed: (() -> Void)?
     private var generation = UUID()
@@ -20,6 +25,9 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
 
     override init() {
         super.init()
+    }
+
+    private func makeWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         // Align WebKit's audio-session intent with the native microphone session.
         // Without this, activating capture can interrupt the embedded video.
@@ -29,9 +37,9 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.userContentController.add(self, name: "music")
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.isOpaque = false
-        webView.backgroundColor = .black
+        let view=WKWebView(frame:.zero,configuration:configuration)
+        view.isOpaque=false; view.backgroundColor = .black
+        return view
     }
 
     func command(for text: String) -> MusicCommand? {
@@ -54,8 +62,8 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
         guard let command = pendingCommand else { return }
         generation = UUID(); pendingCommand = nil
         if case .play = command, !isPlaying {
-            pageGeneration = UUID(); webView.stopLoading()
-            webView.loadHTMLString("", baseURL: nil); track = nil
+            pageGeneration = UUID(); storedWebView?.stopLoading()
+            storedWebView?.loadHTMLString("", baseURL: nil); track = nil
             status = "Carregamento interrompido"; playbackState = -1
         }
     }
@@ -70,7 +78,7 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
             titleRequestedAt = nil
             pageGeneration = UUID()
             status = "Buscando no YouTube…"; errorMessage = nil; isPlaying = false; playbackState = -1
-            webView.loadHTMLString("", baseURL: nil); track = nil
+            storedWebView?.loadHTMLString("", baseURL: nil); track = nil
             do {
                 let found = try await YouTubeSearch.find(query)
                 try Task.checkCancellation()
@@ -149,7 +157,7 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
                 return LocalActionResult(.failed, "Não consegui reiniciar o vídeo agora.") }
         case .stop:
             pageGeneration = UUID(); titleRequestedAt = nil; playbackState = -1; errorMessage = nil
-            webView.loadHTMLString("", baseURL: nil); track = nil; isPlaying = false; status = ""
+            storedWebView?.loadHTMLString("", baseURL: nil); track = nil; isPlaying = false; status = ""
             return LocalActionResult(.succeeded, "Música encerrada.", confirmation: "local.player.cleared")
         }
     }
@@ -158,6 +166,8 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
     /// Real command dispatch/player lifecycle with a local fixture, no YouTube request or microphone.
     static func runExitChecks() async -> String {
         let player = YouTubeMusicPlayer()
+        player.pauseForBackground(); player.cancelPendingCommand()
+        guard !player.hasCreatedWebView else { return "FAIL: idle player created WebKit" }
         let phrases = ["Fecho o YouTube", "Para o YouTube", "Stop the YouTube", "TARS, fecha o YouTube", "Volta pra conversa"]
         for phrase in phrases {
             player.track = YouTubeTrack(id:"abcdefghijk",title:"Local fixture")
@@ -193,12 +203,13 @@ final class YouTubeMusicPlayer: NSObject, ObservableObject, WKScriptMessageHandl
             let cleared = try await player.execute(.stop)
             guard cleared.status == .succeeded, !cleared.confirmation.isEmpty, player.track == nil else { return "FAIL: stop lacks confirmed receipt" }
         } catch { return "FAIL: music receipt/cancellation fixture" }
-        return "PASS: actual music receipts, needs-input/unavailable distinction, pending cancellation without undoing playback, and 5 natural exits through actual player; track cleared (window condition false), generation cancelled, title prompt cleared, paused/exited conversation enabled; no network/audio"
+        guard !player.hasCreatedWebView else { return "FAIL: no-playback commands created WebKit" }
+        return "PASS: lazy WebKit remains absent for idle/background/empty-title/stop/cancellation; actual music receipts, needs-input/unavailable distinction, pending cancellation without undoing playback, and 5 natural exits through actual player; track cleared (window condition false), generation cancelled, title prompt cleared, paused/exited conversation enabled; no network/audio"
     }
     #endif
 
     func pauseForBackground() {
-        webView.evaluateJavaScript("if(window.player) player.pauseVideo()", completionHandler: nil)
+        storedWebView?.evaluateJavaScript("if(window.player) player.pauseVideo()", completionHandler: nil)
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {

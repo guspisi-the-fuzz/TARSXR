@@ -21,6 +21,7 @@ import AVFoundation
     private var stillBusy = false
     private var camera: SequentialSessionCamera?
     private var closing = false
+    private var cameraLease: CameraOwnership.Lease?
     private var observers: [NSObjectProtocol] = []
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
     init() {
@@ -49,6 +50,8 @@ import AVFoundation
         }
         guard UIApplication.shared.applicationState == .active else { stop("APP_INACTIVE"); return }
         if let reason = block { stop(reason); return }
+        guard let lease = CameraOwnership.shared.acquire(.vision) else { detail = SpatialError.cameraBusy.localizedDescription; return }
+        cameraLease = lease
         active = true; state = "STARTING"; generation = UUID(); let token = generation
         let captureCamera = SequentialSessionCamera()
         camera = captureCamera
@@ -85,8 +88,10 @@ import AVFoundation
         worker?.cancel(); worker = nil; analysis?.cancel(); analysis = nil; frame = nil; quality = nil
         if let captureCamera = camera {
             camera = nil; closing = true
+            let stoppedLease = cameraLease; cameraLease = nil
             Task {
                 await captureCamera.stop()
+                if let stoppedLease { CameraOwnership.shared.release(stoppedLease) }
                 closing = false
             }
         }
@@ -103,9 +108,14 @@ import AVFoundation
                 try await Task.sleep(for: .milliseconds(100))
             }
             try Task.checkCancellation()
+            guard let lease = CameraOwnership.shared.acquire(.photo) else { throw SpatialError.cameraBusy }
+            cameraLease = lease
         } catch { stillBusy = false; throw error }
     }
-    func finishStill() { stillBusy = false }
+    func finishStill() {
+        if let lease = cameraLease, lease.mode == .photo { CameraOwnership.shared.release(lease); cameraLease = nil }
+        stillBusy = false
+    }
     var paidAttempts: Int { policy.calls }
     var frameStatus: String {
         guard let frame else { return "UNAVAILABLE" }
